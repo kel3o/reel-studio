@@ -154,3 +154,14 @@ other repo with a camera, microphone, or screen share feature (there is at
 least the possibility of more later) could reuse this exact approach instead
 of reaching for Playwright or Puppeteer. Not built as a standalone tool now,
 just naming it here so it is not reinvented from scratch next time.
+
+The canvas cropping pattern added in `public/devices.js` for the aspect ratio
+toggle (always request the camera's native frame, play it into a hidden
+`<video>`, center crop and scale it onto a canvas to a fixed target
+resolution, then read the recording stream from `canvas.captureStream()`
+combined with the original mic track) is also generic: it is the fix for any
+project where `getUserMedia`'s width/height constraints cannot be trusted to
+produce the resolution actually asked for, which this session found is real
+on at least one real webcam. Worth reaching for again in any other repo that
+records from a camera at a specific aspect ratio. Not extracted as a
+standalone module now, just named here.
