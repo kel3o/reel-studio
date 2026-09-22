@@ -10,33 +10,84 @@
   window.__reelCapture = state;
 
   const panel = document.getElementById('capture-panel');
-  const teleprompter = document.getElementById('teleprompter');
+  const closeBtn = document.getElementById('tp-close');
+  const slowerBtn = document.getElementById('tp-slower');
+  const fasterBtn = document.getElementById('tp-faster');
+  const smallerBtn = document.getElementById('tp-smaller');
+  const biggerBtn = document.getElementById('tp-bigger');
+  const restartBtn = document.getElementById('tp-restart');
+  const mirrorBtn = document.getElementById('tp-mirror');
+  const speedReadout = document.getElementById('tp-speed');
+  const sizeReadout = document.getElementById('tp-size');
+  const clockEl = document.getElementById('tp-clock');
+  const stage = document.getElementById('teleprompter');
+  const textEl = document.getElementById('tp-text');
+  const bar = document.getElementById('tp-bar');
   const statusEl = document.getElementById('capture-status');
   const reviewVideo = document.getElementById('review-video');
   const progressStrip = document.getElementById('progress-strip');
-  const scrollSpeedInput = document.getElementById('scroll-speed');
-  const fontSizeInput = document.getElementById('font-size');
+  const veil = document.getElementById('tp-veil');
+  const veilTitle = document.getElementById('tp-veil-title');
+  const veilGoBtn = document.getElementById('tp-go');
 
+  const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  function faNum(n) {
+    return String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // The pause mark (⏸) stays in paragraph.text for the performer, but the
+  // emphasis[] and pauses[] indices only count spoken words. Rebuilding the
+  // rich markup here (bold words, a "مکث" pill) keeps that contract intact
+  // instead of pushing it back into the parser.
+  function paragraphHtml(p) {
+    const tokens = p.text.split(/\s+/).filter(Boolean);
+    let wordIndex = -1;
+    return tokens
+      .map((token) => {
+        if (token === '⏸') return '<span class="pz">مکث</span>';
+        wordIndex += 1;
+        const text = escapeHtml(token);
+        return p.emphasis.includes(wordIndex) ? `<b>${text}</b>` : text;
+      })
+      .join(' ');
+  }
+
+  let speed = 3;
+  let fontSize = 46;
   // The known bug: adding a sub pixel delta straight to scrollTop truncates
   // to zero every frame at slow speeds, because scrollTop always reads back
   // an integer. Accumulate the real position here instead, and only assign.
   let scrollPos = 0;
+  let lastFrameTs = 0;
+  let recordStartTs = 0;
+  let clockSeconds = 0;
 
   function setStatus(text) {
     statusEl.textContent = text;
   }
 
-  function applyFontSize() {
-    teleprompter.style.fontSize = fontSizeInput.value + 'px';
+  function setSpeed(v) {
+    speed = Math.max(1, Math.min(12, v));
+    speedReadout.textContent = faNum(speed);
+  }
+
+  function setFontSize(v) {
+    fontSize = Math.max(24, Math.min(90, v));
+    panel.style.setProperty('--tp-size', fontSize + 'px');
+    sizeReadout.textContent = faNum(fontSize);
   }
 
   function renderTeleprompter() {
-    teleprompter.innerHTML = '';
+    textEl.innerHTML = '';
     state.paragraphs.forEach((p, i) => {
       const div = document.createElement('div');
       div.className = 'tp-paragraph' + (i === state.current ? ' tp-current' : '');
-      div.textContent = p.text;
-      teleprompter.appendChild(div);
+      div.innerHTML = paragraphHtml(p);
+      textEl.appendChild(div);
     });
   }
 
@@ -71,14 +122,14 @@
   function startCountdown() {
     state.phase = 'countdown';
     let n = 3;
-    setStatus(`شروع تا ${n} ثانیه دیگه`);
+    setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
     const interval = setInterval(() => {
       n -= 1;
       if (n <= 0) {
         clearInterval(interval);
         beginRecording();
       } else {
-        setStatus(`شروع تا ${n} ثانیه دیگه`);
+        setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
       }
     }, 1000);
   }
@@ -92,7 +143,10 @@
     }
     state.phase = 'recording';
     setStatus('در حال ضبط، فاصله رو بزن که تموم بشه');
-    scrollPos = teleprompter.scrollTop;
+    scrollPos = stage.scrollTop;
+    lastFrameTs = 0;
+    recordStartTs = performance.now();
+    clockSeconds = 0;
     state.chunks = [];
     const mimeType = pickMimeType();
     const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -185,12 +239,28 @@
     setStatus('آماده، دوباره ضبط کن');
   }
 
+  function dismissVeil() {
+    veil.classList.add('tp-veil-hidden');
+  }
+
   function handleKey(e) {
     if (state.phase === 'idle' || state.phase === 'done') return;
     if (e.code === 'Space') {
       e.preventDefault();
+      const veilVisible = !veil.classList.contains('tp-veil-hidden');
+      if (veilVisible) {
+        dismissVeil();
+        if (state.phase === 'ready') startCountdown();
+        return;
+      }
       if (state.phase === 'ready') startCountdown();
       else if (state.phase === 'recording') stopRecording();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSpeed(speed + 1);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSpeed(speed - 1);
     } else if (e.key === 'r' || e.key === 'R') {
       if (state.phase === 'review') retake();
     } else if (e.key === 'Enter') {
@@ -199,17 +269,48 @@
   }
   document.addEventListener('keydown', handleKey);
 
-  function scrollStep() {
-    const speed = Number(scrollSpeedInput.value);
-    if (speed > 0 && state.phase === 'recording') {
-      scrollPos += speed * 0.02;
-      teleprompter.scrollTop = scrollPos;
-    }
-    requestAnimationFrame(scrollStep);
-  }
-  requestAnimationFrame(scrollStep);
+  closeBtn.addEventListener('click', () => {
+    const isFull = panel.classList.toggle('fullscreen');
+    closeBtn.textContent = isFull ? 'بستن' : 'تمام‌صفحه';
+  });
+  slowerBtn.addEventListener('click', () => setSpeed(speed - 1));
+  fasterBtn.addEventListener('click', () => setSpeed(speed + 1));
+  smallerBtn.addEventListener('click', () => setFontSize(fontSize - 4));
+  biggerBtn.addEventListener('click', () => setFontSize(fontSize + 4));
+  restartBtn.addEventListener('click', () => {
+    scrollPos = 0;
+    stage.scrollTop = 0;
+  });
+  mirrorBtn.addEventListener('click', () => {
+    const on = panel.classList.toggle('mirror');
+    mirrorBtn.classList.toggle('on', on);
+  });
+  veilGoBtn.addEventListener('click', () => {
+    dismissVeil();
+    if (state.phase === 'ready') startCountdown();
+  });
 
-  fontSizeInput.addEventListener('input', applyFontSize);
+  function frame(ts) {
+    if (!lastFrameTs) lastFrameTs = ts;
+    const dt = (ts - lastFrameTs) / 1000;
+    lastFrameTs = ts;
+
+    if (speed > 0 && state.phase === 'recording') {
+      scrollPos += speed * 11 * dt;
+      stage.scrollTop = scrollPos;
+      clockSeconds = (performance.now() - recordStartTs) / 1000;
+    }
+
+    const mm = Math.floor(clockSeconds / 60);
+    const ss = Math.floor(clockSeconds % 60);
+    clockEl.textContent = faNum(mm) + ':' + faNum(ss < 10 ? '0' + ss : ss);
+
+    const max = stage.scrollHeight - stage.clientHeight;
+    bar.style.width = (max > 0 ? (stage.scrollTop / max) * 100 : 0) + '%';
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 
   async function loadExistingSession(slug) {
     try {
@@ -221,7 +322,7 @@
     }
   }
 
-  window.startCaptureSession = async function (slug, paragraphs) {
+  window.startCaptureSession = async function (slug, paragraphs, title) {
     const existing = await loadExistingSession(slug);
     state.slug = slug;
     state.paragraphs = paragraphs.map((p, i) => {
@@ -229,6 +330,7 @@
       return {
         index: i,
         text: p.text,
+        emphasis: p.emphasis || [],
         takes: prior ? prior.takes || [] : [],
         accepted: prior ? prior.accepted || null : null,
       };
@@ -236,9 +338,17 @@
     const firstUnaccepted = state.paragraphs.findIndex((p) => !p.accepted);
     state.current = firstUnaccepted === -1 ? state.paragraphs.length - 1 : firstUnaccepted;
     state.phase = firstUnaccepted === -1 ? 'done' : 'ready';
+
     panel.hidden = false;
+    panel.classList.add('fullscreen');
+    closeBtn.textContent = 'بستن';
+    veil.classList.remove('tp-veil-hidden');
+    veilTitle.textContent = title || 'تله‌پرامپتر';
+    scrollPos = 0;
+    stage.scrollTop = 0;
     setStatus(state.phase === 'done' ? 'همه‌ی پاراگراف‌ها ضبط شد' : 'آماده');
-    applyFontSize();
+    setSpeed(speed);
+    setFontSize(fontSize);
     renderTeleprompter();
     renderProgress();
   };

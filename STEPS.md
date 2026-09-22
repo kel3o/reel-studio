@@ -20,6 +20,23 @@ saves every take to `takes/<slug>/NN-take.webm`, nothing is ever deleted, and
 `GET`/`POST /api/session` persist which take is accepted per paragraph in
 `session.json` so a stopped session resumes where it left off.
 
+The teleprompter's look was redone on request to match a real teleprompter
+page the owner already had (a one off HTML file made earlier, outside this
+repo): full screen takeover, a fixed control header (speed, font size,
+mirror, restart, close), an eyeline guide near the top, bold orange emphasis
+words, the pause mark rendered as a small "مکث" pill instead of the raw
+glyph, a start veil with keyboard hints, and a bottom scroll progress bar.
+The retake and accept keys stayed exactly as SPEC.md fixed them (space, R,
+Enter); only up and down arrow keys for scroll speed were added on top, since
+the reference page used R for something else (restart from the top) that
+would have collided with our retake key. Two CSS cascade bugs came up while
+matching it: `.tp-veil-hidden` and an unconditional `display: block` on the
+review video both had a later, more general rule quietly override them; both
+are fixed with more specific selectors now (`.tp-veil.tp-veil-hidden`,
+`.review-video[hidden]`), and it is worth remembering that pattern (a
+`[hidden]`-driven element needs `[hidden]` in its own override selector, not
+just a bare class) if new hide or show toggles are added later.
+
 All three self tests pass:
 
 ```
@@ -48,6 +65,11 @@ Two design notes for later phases:
 
 A desktop shortcut ("Reel Studio") launches `start.bat`, which starts the
 server and opens the page in the browser after two seconds.
+
+`public/help.html` is an in page guide (linked as "راهنما" from the scripts
+list), covering script selection, device setup, the teleprompter, the
+keyboard controlled recording flow, and the progress strip. It is not part of
+a numbered phase, added on request before starting phase 4.
 
 ## Next step
 

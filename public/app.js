@@ -19,7 +19,7 @@ async function loadScript(scriptPath) {
   const data = await res.json();
   document.getElementById('script-title').textContent = data.title || '';
   if (window.startCaptureSession) {
-    window.startCaptureSession(data.slug, data.paragraphs);
+    window.startCaptureSession(data.slug, data.paragraphs, data.title);
   }
 }
 

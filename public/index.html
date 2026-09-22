@@ -9,7 +9,10 @@
 <body>
 <div class="app">
   <aside class="scripts-panel">
-    <h1>سناریوها</h1>
+    <div class="scripts-panel-head">
+      <h1>سناریوها</h1>
+      <a href="/help.html" class="help-link">راهنما</a>
+    </div>
     <ul id="script-list" class="script-list"></ul>
   </aside>
   <main class="paragraphs-panel">
@@ -31,25 +34,45 @@
     <h2 id="script-title">یه سناریو رو انتخاب کن</h2>
 
     <section id="capture-panel" class="capture-panel" hidden>
-      <div class="teleprompter-controls">
-        <label>سرعت اسکرول
-          <input type="range" id="scroll-speed" min="0" max="100" value="30" />
-        </label>
-        <label>اندازه‌ی فونت
-          <input type="range" id="font-size" min="18" max="60" value="32" />
-        </label>
+      <header class="tp-header">
+        <button id="tp-close" type="button" title="بستن حالت تمام‌صفحه">بستن</button>
+        <span class="tp-sep"></span>
+        <button id="tp-slower" type="button">کندتر</button>
+        <span class="tp-readout" id="tp-speed">۳</span>
+        <button id="tp-faster" type="button">تندتر</button>
+        <button id="tp-smaller" type="button">کوچک‌تر</button>
+        <span class="tp-readout" id="tp-size">۴۶</span>
+        <button id="tp-bigger" type="button">بزرگ‌تر</button>
+        <button id="tp-restart" type="button">از اول</button>
+        <button id="tp-mirror" type="button">آینه</button>
+        <span class="tp-spacer"></span>
+        <span id="capture-status" class="tp-status">آماده</span>
+        <span class="tp-clock" id="tp-clock">۰:۰۰</span>
+      </header>
+
+      <div class="tp-eyeline"></div>
+
+      <div id="teleprompter" class="tp-stage">
+        <div id="tp-text" class="tp-text"></div>
       </div>
 
-      <div id="teleprompter" class="teleprompter"></div>
+      <div class="tp-bar" id="tp-bar"></div>
 
-      <p id="capture-status" class="capture-status">آماده</p>
-      <p class="capture-hint">
-        فاصله برای شروع یا توقف ضبط، R برای دوباره‌ضبط، Enter برای قبول و رفتن سراغ پاراگراف بعدی
-      </p>
+      <ol id="progress-strip" class="progress-strip"></ol>
 
       <video id="review-video" class="review-video" hidden></video>
 
-      <ol id="progress-strip" class="progress-strip"></ol>
+      <div id="tp-veil" class="tp-veil">
+        <h1 id="tp-veil-title">تله‌پرامپتر</h1>
+        <p>
+          <kbd>فاصله</kbd> شروع و توقف ضبط
+          <kbd>R</kbd> دوباره‌ضبط
+          <kbd>Enter</kbd> قبول و بعدی
+          <kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول
+        </p>
+        <p>کلمه‌های پررنگ تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
+        <button id="tp-go" type="button">شروع</button>
+      </div>
     </section>
   </main>
 </div>
