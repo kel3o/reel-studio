@@ -1,0 +1,8 @@
+config.json
+takes/
+out/
+assets/
+node_modules/
+__pycache__/
+*.webm
+*.mp4

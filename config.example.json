@@ -1,0 +1,17 @@
+{
+  "port": 7180,
+  "scriptsDir": "D:/github/agency-os/clients/erfandigital/content/scripts",
+  "outDir": "./out",
+  "takesDir": "./takes",
+  "assetsDir": "./assets",
+  "ffmpeg": "ffmpeg",
+  "preferredCamera": "REDRAGON Live Camera",
+  "preferredMic": "USB Condenser Microphone",
+  "whisper": {
+    "model": "large-v3",
+    "device": "auto",
+    "python": "python"
+  },
+  "topFrameFallbackColor": "#0d0f12",
+  "accentColor": "#ffc46b"
+}
