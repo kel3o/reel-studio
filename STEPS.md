@@ -71,6 +71,20 @@ list), covering script selection, device setup, the teleprompter, the
 keyboard controlled recording flow, and the progress strip. It is not part of
 a numbered phase, added on request before starting phase 4.
 
+The recording flow also got a visible record button, plus retake and accept
+buttons for the review step, and a small live camera frame in the corner of
+the teleprompter so the framing is visible while reading. Space, R and Enter
+still do the same things; the buttons are an alternative, not a replacement.
+
+While testing this, `tools/test-devices.js` turned out to read its port from
+the real `config.json`, so running it while the app was actually open tried
+to bind port 7180 twice, and it once left a fully working orphaned server
+process behind after a failed run (found by hand with `netstat`, not
+something the test itself reported). Fixed: it now runs on its own isolated
+port and config like `tools/test-capture.js` already did, and both use
+`taskkill /F /T` for cleanup instead of trusting Node's `child.kill()` alone,
+since that once was not enough to actually end the process.
+
 ## Next step
 
 Start **phase 4** in `SPEC.md`: server side ffmpeg stitching of the accepted
@@ -94,3 +108,9 @@ is recorded in `SPEC.md` and it is not an oversight.
 - First real recording, now that phase 3 works: the script
   `2026-09-17-closed-loop-agent-reel-v2.md`, which is written, judged and
   waiting to be recorded.
+- The node process actually serving the app on port 7180 right now started
+  outside the normal desktop shortcut flow (its original process died
+  underneath it at some point this session, cause not tracked down). It is
+  healthy and serving the current code, nothing to fix, just worth knowing
+  if `start.bat` is double clicked and nothing seems to happen: something is
+  probably already listening on 7180.
