@@ -145,3 +145,90 @@ body {
 .readiness.silent-warning {
   color: #fbbf24;
 }
+
+.capture-panel {
+  background: #15181d;
+  border: 1px solid #23262c;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.teleprompter-controls {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.teleprompter {
+  height: 260px;
+  overflow-y: auto;
+  padding: 12px;
+  background: #0a0c0f;
+  border-radius: 8px;
+  scroll-behavior: auto;
+}
+
+.tp-paragraph {
+  color: #565b64;
+  line-height: 1.8;
+  padding: 10px 0;
+  transition: color 0.2s ease;
+}
+
+.tp-paragraph.tp-current {
+  color: #f2f2f2;
+  font-weight: bold;
+}
+
+.capture-status {
+  margin: 12px 0 4px;
+  font-size: 16px;
+  color: #ffc46b;
+}
+
+.capture-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #7a808a;
+}
+
+.review-video {
+  width: 100%;
+  max-width: 360px;
+  border-radius: 8px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.progress-strip {
+  list-style: none;
+  display: flex;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.progress-strip li {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #1d2127;
+  border: 1px solid #2a2e35;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.progress-strip li.current {
+  border-color: #ffc46b;
+}
+
+.progress-strip li.accepted {
+  background: #234a2e;
+  border-color: #4ade80;
+}

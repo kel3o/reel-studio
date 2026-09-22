@@ -18,12 +18,8 @@ async function loadScript(scriptPath) {
   const res = await fetch('/api/script?path=' + encodeURIComponent(scriptPath));
   const data = await res.json();
   document.getElementById('script-title').textContent = data.title || '';
-  const list = document.getElementById('paragraph-list');
-  list.innerHTML = '';
-  for (const p of data.paragraphs) {
-    const li = document.createElement('li');
-    li.textContent = p.text;
-    list.appendChild(li);
+  if (window.startCaptureSession) {
+    window.startCaptureSession(data.slug, data.paragraphs);
   }
 }
 

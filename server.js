@@ -7,8 +7,15 @@ const { parseScript } = require('./lib/parse-script');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const CONFIG_PATH = path.join(ROOT, 'config.json');
+const CONFIG_PATH = process.env.REEL_CONFIG_PATH || path.join(ROOT, 'config.json');
 const CONFIG_EXAMPLE_PATH = path.join(ROOT, 'config.example.json');
+
+function resolveFromRoot(p) {
+  return path.isAbsolute(p) ? p : path.join(ROOT, p);
+}
+
+const SLUG_RE = /^[A-Za-z0-9_-]+$/;
+const NUMBER_RE = /^[0-9]{1,4}$/;
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -27,6 +34,7 @@ function loadConfig() {
 
 const config = loadConfig();
 const PORT = config.port || 7180;
+const TAKES_DIR = resolveFromRoot(config.takesDir || './takes');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -38,6 +46,15 @@ const MIME = {
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
+}
+
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function serveStatic(res, pathname) {
@@ -120,10 +137,69 @@ const server = http.createServer((req, res) => {
     }
     try {
       const content = fs.readFileSync(resolved, 'utf8');
-      sendJson(res, 200, parseScript(content));
+      const parsed = parseScript(content);
+      const slug = path.basename(resolved, path.extname(resolved));
+      sendJson(res, 200, Object.assign({ slug }, parsed));
     } catch (err) {
       sendJson(res, 500, { error: err.message });
     }
+    return;
+  }
+
+  if (pathname === '/api/clip' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    const paragraph = parsed.searchParams.get('paragraph');
+    const take = parsed.searchParams.get('take');
+    if (!slug || !SLUG_RE.test(slug) || !NUMBER_RE.test(paragraph || '') || !NUMBER_RE.test(take || '')) {
+      sendJson(res, 400, { error: 'اسم سناریو، شماره پاراگراف و شماره ضبط لازم است' });
+      return;
+    }
+    readRawBody(req)
+      .then((buffer) => {
+        const dir = path.join(TAKES_DIR, slug);
+        fs.mkdirSync(dir, { recursive: true });
+        const fileName = `${paragraph}-${take}.webm`;
+        fs.writeFileSync(path.join(dir, fileName), buffer);
+        sendJson(res, 200, { file: fileName });
+      })
+      .catch((err) => sendJson(res, 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/session' && req.method === 'GET') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const sessionPath = path.join(TAKES_DIR, slug, 'session.json');
+    if (!fs.existsSync(sessionPath)) {
+      sendJson(res, 404, { error: 'هنوز جلسه‌ای ثبت نشده' });
+      return;
+    }
+    try {
+      sendJson(res, 200, JSON.parse(fs.readFileSync(sessionPath, 'utf8')));
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/session' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    readRawBody(req)
+      .then((buffer) => {
+        const session = JSON.parse(buffer.toString('utf8'));
+        const dir = path.join(TAKES_DIR, slug);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(session, null, 2));
+        sendJson(res, 200, { ok: true });
+      })
+      .catch((err) => sendJson(res, 400, { error: err.message }));
     return;
   }
 

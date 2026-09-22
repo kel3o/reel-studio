@@ -29,10 +29,32 @@
       <p id="readiness" class="readiness">در حال گرفتن دسترسی دوربین و میکروفون</p>
     </section>
     <h2 id="script-title">یه سناریو رو انتخاب کن</h2>
-    <ol id="paragraph-list" class="paragraph-list"></ol>
+
+    <section id="capture-panel" class="capture-panel" hidden>
+      <div class="teleprompter-controls">
+        <label>سرعت اسکرول
+          <input type="range" id="scroll-speed" min="0" max="100" value="30" />
+        </label>
+        <label>اندازه‌ی فونت
+          <input type="range" id="font-size" min="18" max="60" value="32" />
+        </label>
+      </div>
+
+      <div id="teleprompter" class="teleprompter"></div>
+
+      <p id="capture-status" class="capture-status">آماده</p>
+      <p class="capture-hint">
+        فاصله برای شروع یا توقف ضبط، R برای دوباره‌ضبط، Enter برای قبول و رفتن سراغ پاراگراف بعدی
+      </p>
+
+      <video id="review-video" class="review-video" hidden></video>
+
+      <ol id="progress-strip" class="progress-strip"></ol>
+    </section>
   </main>
 </div>
 <script src="/devices.js"></script>
+<script src="/capture.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
