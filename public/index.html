@@ -13,10 +13,26 @@
     <ul id="script-list" class="script-list"></ul>
   </aside>
   <main class="paragraphs-panel">
+    <section class="device-setup">
+      <div class="device-row">
+        <label>دوربین
+          <select id="camera-select"></select>
+        </label>
+        <label>میکروفون
+          <select id="mic-select"></select>
+        </label>
+      </div>
+      <video id="preview" class="preview" autoplay muted playsinline></video>
+      <div class="meter-track">
+        <div id="meter-bar" class="meter-bar"></div>
+      </div>
+      <p id="readiness" class="readiness">در حال گرفتن دسترسی دوربین و میکروفون</p>
+    </section>
     <h2 id="script-title">یه سناریو رو انتخاب کن</h2>
     <ol id="paragraph-list" class="paragraph-list"></ol>
   </main>
 </div>
+<script src="/devices.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

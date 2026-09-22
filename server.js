@@ -85,6 +85,14 @@ const server = http.createServer((req, res) => {
   const parsed = new URL(req.url, 'http://127.0.0.1');
   const pathname = parsed.pathname;
 
+  if (pathname === '/api/devices-config') {
+    sendJson(res, 200, {
+      preferredCamera: config.preferredCamera || '',
+      preferredMic: config.preferredMic || '',
+    });
+    return;
+  }
+
   if (pathname === '/api/scripts') {
     try {
       sendJson(res, 200, listScripts());

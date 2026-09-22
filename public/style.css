@@ -75,3 +75,73 @@ body {
 .paragraph-list li {
   padding-inline-start: 8px;
 }
+
+.device-setup {
+  background: #15181d;
+  border: 1px solid #23262c;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.device-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.device-row select {
+  display: block;
+  margin-top: 4px;
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 220px;
+}
+
+.preview {
+  width: 100%;
+  max-width: 480px;
+  border-radius: 8px;
+  background: #000;
+  transform: scaleX(-1);
+  display: block;
+}
+
+.meter-track {
+  width: 100%;
+  max-width: 480px;
+  height: 10px;
+  border-radius: 5px;
+  background: #1d2127;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.meter-bar {
+  height: 100%;
+  width: 0%;
+  background: #4ade80;
+}
+
+.meter-bar.clip {
+  background: #f87171;
+}
+
+.readiness {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #c5c9d0;
+}
+
+.readiness.clip-warning {
+  color: #f87171;
+}
+
+.readiness.silent-warning {
+  color: #fbbf24;
+}
