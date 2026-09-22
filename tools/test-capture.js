@@ -12,6 +12,7 @@ const {
   generateFakeAudioFile,
   connectCdp,
   launchBrowser,
+  killHard,
 } = require('./lib/browser-test');
 
 const ROOT = path.join(__dirname, '..');
@@ -135,9 +136,9 @@ async function main() {
 
     console.log('OK: phase 3 self test passed');
   } finally {
-    if (chromeProc) chromeProc.kill();
-    serverProc.kill();
-    await wait(500);
+    killHard(chromeProc);
+    killHard(serverProc);
+    await wait(300);
     fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   }
 }

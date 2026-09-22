@@ -12,27 +12,40 @@ const {
   generateFakeAudioFile,
   connectCdp,
   launchBrowser,
+  killHard,
 } = require('./lib/browser-test');
 
 const ROOT = path.join(__dirname, '..');
 const CDP_PORT = 9333;
-
-function readPort() {
-  const configPath = path.join(ROOT, 'config.json');
-  const examplePath = path.join(ROOT, 'config.example.json');
-  const file = fs.existsSync(configPath) ? configPath : examplePath;
-  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return config.port || 7180;
-}
+const APP_PORT = 7182;
 
 async function main() {
-  const appPort = readPort();
-  const appUrl = `http://127.0.0.1:${appPort}/`;
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-studio-chrome-'));
-  const fakeAudioPath = path.join(userDataDir, 'fake-mic.wav');
+  const appUrl = `http://127.0.0.1:${APP_PORT}/`;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-studio-devices-'));
+  const userDataDir = path.join(tempRoot, 'chrome');
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const fakeAudioPath = path.join(tempRoot, 'fake-mic.wav');
   generateFakeAudioFile(fakeAudioPath, 12);
 
-  const serverProc = spawn('node', ['server.js'], { cwd: ROOT, stdio: 'ignore' });
+  // An isolated port and config, so this never collides with a real
+  // reel-studio instance the owner might already have open (it did once).
+  const configPath = path.join(tempRoot, 'config.json');
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      port: APP_PORT,
+      scriptsDir: path.join(ROOT, 'tools', 'fixtures'),
+      takesDir: path.join(tempRoot, 'takes'),
+      outDir: path.join(tempRoot, 'out'),
+      assetsDir: path.join(tempRoot, 'assets'),
+    })
+  );
+
+  const serverProc = spawn('node', ['server.js'], {
+    cwd: ROOT,
+    stdio: 'ignore',
+    env: Object.assign({}, process.env, { REEL_CONFIG_PATH: configPath }),
+  });
   let chromeProc;
 
   try {
@@ -57,6 +70,10 @@ async function main() {
     assert.ok(counts.cameras >= 1, `expected at least one camera, got ${counts.cameras}`);
     assert.ok(counts.mics >= 1, `expected at least one microphone, got ${counts.mics}`);
 
+    // The audio graph needs a moment to start producing real samples after
+    // getUserMedia resolves; sampling immediately can catch it still at its
+    // silent startup value and make the "the meter changes" assertion flaky.
+    await wait(500);
     const sample1 = await cdp.evaluate('window.__reel.meterValue');
     await wait(500);
     const sample2 = await cdp.evaluate('window.__reel.meterValue');
@@ -68,10 +85,10 @@ async function main() {
 
     console.log('OK: phase 2 self test passed');
   } finally {
-    if (chromeProc) chromeProc.kill();
-    serverProc.kill();
-    await wait(500);
-    fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+    killHard(chromeProc);
+    killHard(serverProc);
+    await wait(300);
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   }
 }
 

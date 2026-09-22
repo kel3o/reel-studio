@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 const fs = require('fs');
 
 const BROWSER_CANDIDATES = [
@@ -115,6 +115,20 @@ async function connectCdp(port) {
   return new CdpClient(ws);
 }
 
+// A plain child.kill() has occasionally left a fully bound, healthy node
+// server running after a test failed and cleanup should have removed it
+// (seen once in practice, cause not fully pinned down). taskkill /F /T is
+// the reliable way to actually end a process tree on Windows, so tests use
+// it instead of trusting the softer Node API to hold up under a failure.
+function killHard(proc) {
+  if (!proc || proc.pid == null) return;
+  try {
+    spawnSync('taskkill', ['/PID', String(proc.pid), '/F', '/T'], { stdio: 'ignore' });
+  } catch (e) {
+    // best effort, the process may already be gone
+  }
+}
+
 function launchBrowser({ cdpPort, userDataDir, fakeAudioPath, url }) {
   const browser = findBrowser();
   return spawn(
@@ -144,4 +158,5 @@ module.exports = {
   CdpClient,
   connectCdp,
   launchBrowser,
+  killHard,
 };
