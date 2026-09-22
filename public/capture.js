@@ -25,10 +25,14 @@
   const bar = document.getElementById('tp-bar');
   const statusEl = document.getElementById('capture-status');
   const reviewVideo = document.getElementById('review-video');
+  const liveCam = document.getElementById('tp-live-cam');
   const progressStrip = document.getElementById('progress-strip');
   const veil = document.getElementById('tp-veil');
   const veilTitle = document.getElementById('tp-veil-title');
   const veilGoBtn = document.getElementById('tp-go');
+  const recordBtn = document.getElementById('tp-record');
+  const retakeBtn = document.getElementById('tp-retake');
+  const acceptBtn = document.getElementById('tp-accept');
 
   const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
   function faNum(n) {
@@ -70,6 +74,25 @@
     statusEl.textContent = text;
   }
 
+  function updateRecordButton() {
+    recordBtn.hidden = state.phase === 'review' || state.phase === 'done' || state.phase === 'idle';
+    retakeBtn.hidden = state.phase !== 'review';
+    acceptBtn.hidden = state.phase !== 'review';
+
+    if (state.phase === 'ready') {
+      recordBtn.textContent = 'ضبط';
+      recordBtn.disabled = false;
+      recordBtn.classList.remove('on');
+    } else if (state.phase === 'recording') {
+      recordBtn.textContent = 'توقف';
+      recordBtn.disabled = false;
+      recordBtn.classList.add('on');
+    } else if (state.phase === 'countdown') {
+      recordBtn.disabled = true;
+      recordBtn.classList.remove('on');
+    }
+  }
+
   function setSpeed(v) {
     speed = Math.max(1, Math.min(12, v));
     speedReadout.textContent = faNum(speed);
@@ -102,6 +125,7 @@
         if (state.phase === 'ready' || state.phase === 'idle' || state.phase === 'done') {
           state.current = i;
           state.phase = 'ready';
+          updateRecordButton();
           renderTeleprompter();
           renderProgress();
           setStatus('آماده');
@@ -121,8 +145,10 @@
 
   function startCountdown() {
     state.phase = 'countdown';
+    updateRecordButton();
     let n = 3;
     setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
+    recordBtn.textContent = faNum(n);
     const interval = setInterval(() => {
       n -= 1;
       if (n <= 0) {
@@ -130,6 +156,7 @@
         beginRecording();
       } else {
         setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
+        recordBtn.textContent = faNum(n);
       }
     }, 1000);
   }
@@ -139,9 +166,12 @@
     if (!stream) {
       setStatus('دوربین یا میکروفون آماده نیست');
       state.phase = 'ready';
+      updateRecordButton();
       return;
     }
+    if (liveCam.srcObject !== stream) liveCam.srcObject = stream;
     state.phase = 'recording';
+    updateRecordButton();
     setStatus('در حال ضبط، فاصله رو بزن که تموم بشه');
     scrollPos = stage.scrollTop;
     lastFrameTs = 0;
@@ -184,10 +214,12 @@
 
     reviewVideo.src = URL.createObjectURL(blob);
     reviewVideo.hidden = false;
+    liveCam.hidden = true;
     reviewVideo.currentTime = 0;
     reviewVideo.play().catch(() => {});
 
     state.phase = 'review';
+    updateRecordButton();
     setStatus('پخش دوباره، Enter برای قبول، R برای دوباره‌ضبط');
     renderProgress();
   }
@@ -217,6 +249,7 @@
     const p = state.paragraphs[state.current];
     p.accepted = p.takes[p.takes.length - 1];
     reviewVideo.hidden = true;
+    liveCam.hidden = false;
     reviewVideo.pause();
     saveSession();
 
@@ -228,14 +261,17 @@
       state.phase = 'done';
       setStatus('همه‌ی پاراگراف‌ها ضبط شد');
     }
+    updateRecordButton();
     renderTeleprompter();
     renderProgress();
   }
 
   function retake() {
     reviewVideo.hidden = true;
+    liveCam.hidden = false;
     reviewVideo.pause();
     state.phase = 'ready';
+    updateRecordButton();
     setStatus('آماده، دوباره ضبط کن');
   }
 
@@ -243,18 +279,22 @@
     veil.classList.add('tp-veil-hidden');
   }
 
+  function toggleRecording() {
+    const veilVisible = !veil.classList.contains('tp-veil-hidden');
+    if (veilVisible) {
+      dismissVeil();
+      if (state.phase === 'ready') startCountdown();
+      return;
+    }
+    if (state.phase === 'ready') startCountdown();
+    else if (state.phase === 'recording') stopRecording();
+  }
+
   function handleKey(e) {
     if (state.phase === 'idle' || state.phase === 'done') return;
     if (e.code === 'Space') {
       e.preventDefault();
-      const veilVisible = !veil.classList.contains('tp-veil-hidden');
-      if (veilVisible) {
-        dismissVeil();
-        if (state.phase === 'ready') startCountdown();
-        return;
-      }
-      if (state.phase === 'ready') startCountdown();
-      else if (state.phase === 'recording') stopRecording();
+      toggleRecording();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSpeed(speed + 1);
@@ -289,6 +329,9 @@
     dismissVeil();
     if (state.phase === 'ready') startCountdown();
   });
+  recordBtn.addEventListener('click', toggleRecording);
+  retakeBtn.addEventListener('click', retake);
+  acceptBtn.addEventListener('click', acceptTake);
 
   function frame(ts) {
     if (!lastFrameTs) lastFrameTs = ts;
@@ -342,6 +385,9 @@
     panel.hidden = false;
     panel.classList.add('fullscreen');
     closeBtn.textContent = 'بستن';
+    if (window.__reel && window.__reel.stream) {
+      liveCam.srcObject = window.__reel.stream;
+    }
     veil.classList.remove('tp-veil-hidden');
     veilTitle.textContent = title || 'تله‌پرامپتر';
     scrollPos = 0;
@@ -349,6 +395,7 @@
     setStatus(state.phase === 'done' ? 'همه‌ی پاراگراف‌ها ضبط شد' : 'آماده');
     setSpeed(speed);
     setFontSize(fontSize);
+    updateRecordButton();
     renderTeleprompter();
     renderProgress();
   };

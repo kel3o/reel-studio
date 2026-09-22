@@ -60,7 +60,16 @@
 
       <ol id="progress-strip" class="progress-strip"></ol>
 
-      <video id="review-video" class="review-video" hidden></video>
+      <div class="tp-cam-box">
+        <video id="tp-live-cam" class="tp-cam-video" autoplay muted playsinline></video>
+        <video id="review-video" class="tp-cam-video" hidden></video>
+      </div>
+
+      <div class="tp-record-row">
+        <button id="tp-record" type="button" class="tp-record-btn">ضبط</button>
+        <button id="tp-retake" type="button" class="tp-action-btn" hidden>دوباره‌ضبط</button>
+        <button id="tp-accept" type="button" class="tp-action-btn tp-accept-btn" hidden>قبول</button>
+      </div>
 
       <div id="tp-veil" class="tp-veil">
         <h1 id="tp-veil-title">تله‌پرامپتر</h1>

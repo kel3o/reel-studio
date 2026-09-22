@@ -371,18 +371,92 @@ body {
   display: none;
 }
 
-.review-video {
+.tp-cam-box {
   position: absolute;
-  bottom: 40px;
+  top: 60px;
   left: 14px;
-  width: 220px;
-  border-radius: 8px;
-  display: block;
+  width: 200px;
   z-index: 7;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  border: 1px solid #23262c;
 }
 
-.review-video[hidden] {
+.tp-cam-video {
+  display: block;
+  width: 100%;
+}
+
+#tp-live-cam {
+  transform: scaleX(-1);
+}
+
+.tp-cam-video[hidden] {
+  display: none;
+}
+
+.tp-record-row {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: flex;
+  gap: 10px;
+}
+
+.tp-record-btn {
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+  background: #e5484d;
+  border: 2px solid #e5484d;
+  border-radius: 999px;
+  padding: 12px 34px;
+}
+
+.tp-record-btn:hover {
+  background: #f2696d;
+}
+
+.tp-record-btn.on {
+  background: #181c22;
+  color: #f2f2f2;
+}
+
+.tp-record-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.tp-action-btn {
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #f2f2f2;
+  background: #181c22;
+  border: 2px solid #23262c;
+  border-radius: 999px;
+  padding: 12px 28px;
+}
+
+.tp-action-btn:hover {
+  border-color: #39414d;
+}
+
+.tp-accept-btn {
+  color: #111;
+  background: #4ade80;
+  border-color: #4ade80;
+}
+
+.tp-record-btn[hidden],
+.tp-action-btn[hidden] {
   display: none;
 }
 
