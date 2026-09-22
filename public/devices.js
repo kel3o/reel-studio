@@ -7,14 +7,22 @@
     audioContext: null,
     analyser: null,
     silentWarning: false,
+    orientation: 'landscape',
   };
   window.__reel = state;
+
+  const ORIENTATION_SIZES = {
+    landscape: { width: 1920, height: 1080 },
+    portrait: { width: 1080, height: 1920 },
+  };
 
   const cameraSelect = document.getElementById('camera-select');
   const micSelect = document.getElementById('mic-select');
   const preview = document.getElementById('preview');
   const meterBar = document.getElementById('meter-bar');
   const readiness = document.getElementById('readiness');
+  const orientationHorizontalBtn = document.getElementById('orientation-horizontal');
+  const orientationVerticalBtn = document.getElementById('orientation-vertical');
 
   function loadStoredId(key) {
     try {
@@ -84,9 +92,10 @@
 
   async function startPreview(camId, micId) {
     stopStream();
+    const size = ORIENTATION_SIZES[state.orientation] || ORIENTATION_SIZES.landscape;
     const constraints = {
       video: Object.assign(
-        { width: 1920, height: 1080, frameRate: 30 },
+        { width: size.width, height: size.height, frameRate: 30 },
         camId ? { deviceId: { exact: camId } } : {}
       ),
       audio: Object.assign(
@@ -164,7 +173,26 @@
     requestAnimationFrame(tickMeter);
   }
 
+  function renderOrientationButtons() {
+    orientationHorizontalBtn.classList.toggle('on', state.orientation === 'landscape');
+    orientationVerticalBtn.classList.toggle('on', state.orientation === 'portrait');
+  }
+
+  async function setOrientation(orientation) {
+    if (state.orientation === orientation) return;
+    state.orientation = orientation;
+    storeId('reel.orientation', orientation);
+    renderOrientationButtons();
+    await startPreview(cameraSelect.value, micSelect.value);
+  }
+
   async function initDevices() {
+    const stored = loadStoredId('reel.orientation');
+    state.orientation = stored === 'portrait' ? 'portrait' : 'landscape';
+    renderOrientationButtons();
+    orientationHorizontalBtn.addEventListener('click', () => setOrientation('landscape'));
+    orientationVerticalBtn.addEventListener('click', () => setOrientation('portrait'));
+
     const { preferredCamera, preferredMic } = await fetchPreferredNames();
     try {
       const permStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });

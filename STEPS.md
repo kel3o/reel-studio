@@ -10,7 +10,14 @@ Phase 1: `server.js`, `lib/parse-script.js`, `public/` (page, css, js),
 Phase 2: camera and microphone pickers (`public/devices.js`), live mirrored
 preview, the WebAudio level meter with clip and silent warnings, the one line
 readiness strip, and `/api/devices-config` so the picker can preselect the
-REDRAGON camera and the USB condenser mic by name.
+REDRAGON camera and the USB condenser mic by name. An orientation toggle
+(افقی/عمودی) was added on request: it switches the `getUserMedia` request
+between 1920x1080 and 1080x1920 and restarts the preview, so capture itself
+can be native vertical instead of only cropped to vertical later in phase 5.
+Choice is saved to localStorage (`reel.orientation`) and read back on page
+load, the same pattern as the camera and mic pickers. Verified with a fake
+device Chrome run confirming the track settings flip both directions and the
+saved value is `portrait` after toggling.
 
 Phase 3: the teleprompter and per paragraph capture (`public/capture.js`).
 Auto scroll with a speed control and a font size control, current paragraph
