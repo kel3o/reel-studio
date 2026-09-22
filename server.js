@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { parseScript } = require('./lib/parse-script');
 
 const ROOT = __dirname;
@@ -163,6 +164,22 @@ const server = http.createServer((req, res) => {
         sendJson(res, 200, { file: fileName });
       })
       .catch((err) => sendJson(res, 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/open-folder' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const dir = path.join(TAKES_DIR, slug);
+    fs.mkdirSync(dir, { recursive: true });
+    // explorer.exe sometimes exits non zero even when it opened the window
+    // fine, so spawning it and moving on is the correct thing to do here.
+    const opener = spawn('explorer.exe', [dir]);
+    opener.on('error', () => {});
+    sendJson(res, 200, { ok: true });
     return;
   }
 

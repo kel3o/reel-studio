@@ -17,6 +17,7 @@
   const biggerBtn = document.getElementById('tp-bigger');
   const restartBtn = document.getElementById('tp-restart');
   const mirrorBtn = document.getElementById('tp-mirror');
+  const openFolderBtn = document.getElementById('tp-open-folder');
   const speedReadout = document.getElementById('tp-speed');
   const sizeReadout = document.getElementById('tp-size');
   const clockEl = document.getElementById('tp-clock');
@@ -324,6 +325,10 @@
   mirrorBtn.addEventListener('click', () => {
     const on = panel.classList.toggle('mirror');
     mirrorBtn.classList.toggle('on', on);
+  });
+  openFolderBtn.addEventListener('click', () => {
+    if (!state.slug) return;
+    fetch(`/api/open-folder?slug=${encodeURIComponent(state.slug)}`, { method: 'POST' }).catch(() => {});
   });
   veilGoBtn.addEventListener('click', () => {
     dismissVeil();
