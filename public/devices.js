@@ -4,6 +4,9 @@
     mics: [],
     meterValue: -100,
     stream: null,
+    rawStream: null,
+    canvasStream: null,
+    drawHandle: null,
     audioContext: null,
     analyser: null,
     silentWarning: false,
@@ -11,18 +14,31 @@
   };
   window.__reel = state;
 
-  const ORIENTATION_SIZES = {
-    landscape: { width: 1920, height: 1080 },
-    portrait: { width: 1080, height: 1920 },
+  // The physical webcam decides what resolution it actually hands back for a
+  // requested width/height, and that choice is not reliable across devices
+  // (one webcam handed back a 1:1 crop for a requested 1080x1920). Always
+  // asking the camera for its native landscape frame and then cropping and
+  // scaling it on a canvas guarantees the exact published resolution below,
+  // regardless of what the driver decides to do with an odd request.
+  const ORIENTATIONS = {
+    landscape: { ratio: 16 / 9, width: 1920, height: 1080 },
+    square: { ratio: 1, width: 1080, height: 1080 },
+    vertical: { ratio: 9 / 16, width: 1080, height: 1920 },
   };
 
   const cameraSelect = document.getElementById('camera-select');
   const micSelect = document.getElementById('mic-select');
   const preview = document.getElementById('preview');
+  const rawCam = document.getElementById('raw-cam');
+  const canvas = document.getElementById('frame-canvas');
+  const ctx = canvas.getContext('2d');
   const meterBar = document.getElementById('meter-bar');
   const readiness = document.getElementById('readiness');
-  const orientationHorizontalBtn = document.getElementById('orientation-horizontal');
-  const orientationVerticalBtn = document.getElementById('orientation-vertical');
+  const orientationButtons = {
+    landscape: document.getElementById('orientation-landscape'),
+    square: document.getElementById('orientation-square'),
+    vertical: document.getElementById('orientation-vertical'),
+  };
 
   function loadStoredId(key) {
     try {
@@ -79,10 +95,19 @@
   }
 
   function stopStream() {
-    if (state.stream) {
-      state.stream.getTracks().forEach((t) => t.stop());
-      state.stream = null;
+    if (state.drawHandle !== null) {
+      cancelAnimationFrame(state.drawHandle);
+      state.drawHandle = null;
     }
+    if (state.canvasStream) {
+      state.canvasStream.getTracks().forEach((t) => t.stop());
+      state.canvasStream = null;
+    }
+    if (state.rawStream) {
+      state.rawStream.getTracks().forEach((t) => t.stop());
+      state.rawStream = null;
+    }
+    state.stream = null;
     if (state.audioContext) {
       state.audioContext.close();
       state.audioContext = null;
@@ -90,12 +115,32 @@
     }
   }
 
+  function waitForVideoSize(videoEl) {
+    if (videoEl.videoWidth && videoEl.videoHeight) return Promise.resolve();
+    return new Promise((resolve) => {
+      videoEl.addEventListener('loadedmetadata', () => resolve(), { once: true });
+    });
+  }
+
+  // Cover fit: crop the source frame to the target ratio (centered), so the
+  // canvas draw below is a plain crop plus uniform scale, never a squeeze.
+  function computeCropRect(srcW, srcH, targetRatio) {
+    const srcRatio = srcW / srcH;
+    if (srcRatio > targetRatio) {
+      const sh = srcH;
+      const sw = srcH * targetRatio;
+      return { sx: (srcW - sw) / 2, sy: 0, sw, sh };
+    }
+    const sw = srcW;
+    const sh = srcW / targetRatio;
+    return { sx: 0, sy: (srcH - sh) / 2, sw, sh };
+  }
+
   async function startPreview(camId, micId) {
     stopStream();
-    const size = ORIENTATION_SIZES[state.orientation] || ORIENTATION_SIZES.landscape;
     const constraints = {
       video: Object.assign(
-        { width: size.width, height: size.height, frameRate: 30 },
+        { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: 30 },
         camId ? { deviceId: { exact: camId } } : {}
       ),
       audio: Object.assign(
@@ -104,17 +149,33 @@
       ),
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    state.stream = stream;
-    preview.srcObject = stream;
+    state.rawStream = stream;
+    rawCam.srcObject = stream;
+    await rawCam.play().catch(() => {});
+    await waitForVideoSize(rawCam);
+
+    const target = ORIENTATIONS[state.orientation] || ORIENTATIONS.landscape;
+    canvas.width = target.width;
+    canvas.height = target.height;
+
+    function drawFrame() {
+      const { sx, sy, sw, sh } = computeCropRect(rawCam.videoWidth, rawCam.videoHeight, target.ratio);
+      ctx.drawImage(rawCam, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      state.drawHandle = requestAnimationFrame(drawFrame);
+    }
+    drawFrame();
+
+    const canvasStream = canvas.captureStream(30);
+    state.canvasStream = canvasStream;
+    const audioTrack = stream.getAudioTracks()[0];
+    const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
+    state.stream = new MediaStream(combined);
+    preview.srcObject = state.stream;
 
     const videoTrack = stream.getVideoTracks()[0];
-    const audioTrack = stream.getAudioTracks()[0];
-
-    const settings = videoTrack ? videoTrack.getSettings() : {};
     readiness.dataset.camera = videoTrack ? videoTrack.label : 'بدون دوربین';
     readiness.dataset.mic = audioTrack ? audioTrack.label : 'بدون میکروفون';
-    readiness.dataset.resolution =
-      settings.width && settings.height ? `${settings.width}x${settings.height}` : 'نامشخص';
+    readiness.dataset.resolution = `${canvas.width}x${canvas.height}`;
 
     state.audioContext = new AudioContext();
     const source = state.audioContext.createMediaStreamSource(stream);
@@ -174,8 +235,9 @@
   }
 
   function renderOrientationButtons() {
-    orientationHorizontalBtn.classList.toggle('on', state.orientation === 'landscape');
-    orientationVerticalBtn.classList.toggle('on', state.orientation === 'portrait');
+    Object.keys(orientationButtons).forEach((key) => {
+      orientationButtons[key].classList.toggle('on', state.orientation === key);
+    });
   }
 
   async function setOrientation(orientation) {
@@ -188,10 +250,11 @@
 
   async function initDevices() {
     const stored = loadStoredId('reel.orientation');
-    state.orientation = stored === 'portrait' ? 'portrait' : 'landscape';
+    state.orientation = ORIENTATIONS[stored] ? stored : 'landscape';
     renderOrientationButtons();
-    orientationHorizontalBtn.addEventListener('click', () => setOrientation('landscape'));
-    orientationVerticalBtn.addEventListener('click', () => setOrientation('portrait'));
+    Object.keys(orientationButtons).forEach((key) => {
+      orientationButtons[key].addEventListener('click', () => setOrientation(key));
+    });
 
     const { preferredCamera, preferredMic } = await fetchPreferredNames();
     try {

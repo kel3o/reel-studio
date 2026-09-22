@@ -130,6 +130,15 @@ body {
   display: block;
 }
 
+.raw-cam,
+.frame-canvas {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .orientation-group {
   display: flex;
   align-items: center;

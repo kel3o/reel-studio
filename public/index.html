@@ -25,12 +25,15 @@
           <select id="mic-select"></select>
         </label>
         <div class="orientation-group">
-          <span class="orientation-label">جهت ویدیو</span>
-          <button id="orientation-horizontal" type="button" class="orientation-btn">افقی</button>
-          <button id="orientation-vertical" type="button" class="orientation-btn">عمودی</button>
+          <span class="orientation-label">نسبت تصویر</span>
+          <button id="orientation-landscape" type="button" class="orientation-btn">افقی</button>
+          <button id="orientation-square" type="button" class="orientation-btn">۱:۱</button>
+          <button id="orientation-vertical" type="button" class="orientation-btn">۹:۱۶</button>
         </div>
       </div>
       <video id="preview" class="preview" autoplay muted playsinline></video>
+      <video id="raw-cam" class="raw-cam" autoplay muted playsinline></video>
+      <canvas id="frame-canvas" class="frame-canvas"></canvas>
       <div class="meter-track">
         <div id="meter-bar" class="meter-bar"></div>
       </div>

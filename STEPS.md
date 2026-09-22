@@ -10,14 +10,28 @@ Phase 1: `server.js`, `lib/parse-script.js`, `public/` (page, css, js),
 Phase 2: camera and microphone pickers (`public/devices.js`), live mirrored
 preview, the WebAudio level meter with clip and silent warnings, the one line
 readiness strip, and `/api/devices-config` so the picker can preselect the
-REDRAGON camera and the USB condenser mic by name. An orientation toggle
-(افقی/عمودی) was added on request: it switches the `getUserMedia` request
-between 1920x1080 and 1080x1920 and restarts the preview, so capture itself
-can be native vertical instead of only cropped to vertical later in phase 5.
-Choice is saved to localStorage (`reel.orientation`) and read back on page
-load, the same pattern as the camera and mic pickers. Verified with a fake
-device Chrome run confirming the track settings flip both directions and the
-saved value is `portrait` after toggling.
+REDRAGON camera and the USB condenser mic by name.
+
+An aspect ratio toggle (افقی ۱۶:۹ / ۱:۱ / عمودی ۹:۱۶) was added on request, in
+two rounds. The first round just asked the camera for a different
+`getUserMedia` resolution per ratio, which turned out to be unreliable: on the
+real REDRAGON camera, asking for a 1080x1920 portrait frame came back as a
+1:1 crop instead, some driver level decision outside this app's control. The
+fix, still in phase 2 and still capture time, not a phase 5 concern: always
+request the camera's native landscape frame, then composite it onto a hidden
+canvas (`public/index.html`'s `#raw-cam` and `#frame-canvas`) with a centered
+crop to the target ratio, upscaled with `drawImage` to the exact published
+size (1920x1080, 1080x1080 or 1080x1920), and feed `canvas.captureStream()`
+plus the original mic track into the stream everything else (`preview`, the
+teleprompter's corner camera, `MediaRecorder`) already reads from
+`window.__reel.stream`. This makes the published resolution exact regardless
+of what a given camera driver does with an odd request. Choice is saved to
+localStorage (`reel.orientation`, values `landscape`/`square`/`vertical`) and
+read back on page load. Verified with a fake device Chrome run: all three
+ratios produce their exact published resolution and the readiness line's
+resolution text, no leaked camera track across a switch, and the existing
+phase 2 and phase 3 self tests (`tools/test-devices.js`, `tools/test-capture.js`)
+still pass with recording now sourced from the composited canvas stream.
 
 Phase 3: the teleprompter and per paragraph capture (`public/capture.js`).
 Auto scroll with a speed control and a font size control, current paragraph
