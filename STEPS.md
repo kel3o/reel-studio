@@ -123,3 +123,13 @@ is recorded in `SPEC.md` and it is not an oversight.
   `takes/2026-09-17-closed-loop-agent-reel-v2/01-1.webm`, paragraph 1,
   accepted. Left in place, it is a real take and phase 4 (stitching) can use
   it once it exists.
+
+## Reusable tool candidate
+
+`tools/lib/browser-test.js` (fake camera/mic Chrome launch, a minimal CDP
+client over Node's native WebSocket, no npm dependencies) is a generic
+getUserMedia/WebRTC feature test harness, not specific to reel-studio. Any
+other repo with a camera, microphone, or screen share feature (there is at
+least the possibility of more later) could reuse this exact approach instead
+of reaching for Playwright or Puppeteer. Not built as a standalone tool now,
+just naming it here so it is not reinvented from scratch next time.
