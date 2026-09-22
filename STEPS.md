@@ -75,6 +75,9 @@ The recording flow also got a visible record button, plus retake and accept
 buttons for the review step, and a small live camera frame in the corner of
 the teleprompter so the framing is visible while reading. Space, R and Enter
 still do the same things; the buttons are an alternative, not a replacement.
+A "پوشه" header button opens the current script's `takes/<slug>/` folder in
+Explorer (`POST /api/open-folder`), so there is no need to type the path by
+hand to find a clip.
 
 While testing this, `tools/test-devices.js` turned out to read its port from
 the real `config.json`, so running it while the app was actually open tried
@@ -108,9 +111,15 @@ is recorded in `SPEC.md` and it is not an oversight.
 - First real recording, now that phase 3 works: the script
   `2026-09-17-closed-loop-agent-reel-v2.md`, which is written, judged and
   waiting to be recorded.
-- The node process actually serving the app on port 7180 right now started
-  outside the normal desktop shortcut flow (its original process died
-  underneath it at some point this session, cause not tracked down). It is
-  healthy and serving the current code, nothing to fix, just worth knowing
-  if `start.bat` is double clicked and nothing seems to happen: something is
-  probably already listening on 7180.
+- Mid session, the original server process died on its own (cause not
+  tracked down) and a stray one from a test run briefly took its place. Both
+  are resolved now: the server currently running on port 7180 was started
+  cleanly via `start.bat` after the last code change (the open-folder
+  button), so it has the latest code. If this happens again, the symptom is
+  `start.bat` looking like it does nothing: something is already listening
+  on 7180, which now just opens the browser instead of trying to start a
+  second server (see the launcher fix above).
+- One real recording exists from this session:
+  `takes/2026-09-17-closed-loop-agent-reel-v2/01-1.webm`, paragraph 1,
+  accepted. Left in place, it is a real take and phase 4 (stitching) can use
+  it once it exists.
