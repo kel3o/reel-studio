@@ -45,6 +45,98 @@ body {
   text-decoration: underline;
 }
 
+.manual-open {
+  width: 100%;
+  margin-bottom: 12px;
+  background: transparent;
+  color: #ffc46b;
+  border: 1px dashed #8a6a32;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.manual-open:hover {
+  border-color: #ffc46b;
+}
+
+.manual-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.manual-form[hidden] {
+  display: none;
+}
+
+.manual-form label {
+  font-size: 12px;
+  color: #c5c9d0;
+}
+
+.manual-form input,
+.manual-form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.manual-form textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.manual-error {
+  margin: 0;
+  min-height: 1em;
+  color: #f87171;
+  font-size: 12px;
+}
+
+.manual-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.manual-actions button {
+  flex: 1;
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.manual-actions button[type='submit'] {
+  background: #ffc46b;
+  color: #1a1408;
+  border-color: #ffc46b;
+}
+
+.manual-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.script-tag {
+  display: inline-block;
+  margin-inline-end: 6px;
+  color: #ffc46b;
+  font-size: 11px;
+}
+
 .script-list {
   list-style: none;
   margin: 0;
@@ -109,6 +201,35 @@ body {
   flex-wrap: wrap;
 }
 
+.phone-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #9aa0a8;
+}
+
+.phone-hint.on {
+  color: #86efac;
+}
+
+.phone-link {
+  direction: ltr;
+  unicode-bidi: isolate;
+  color: #ffc46b;
+}
+
+.phone-hint button {
+  display: inline-block;
+  margin-top: 8px;
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
 .device-row select {
   display: block;
   margin-top: 4px;
@@ -130,12 +251,30 @@ body {
   display: block;
 }
 
+body.phone-cam-live .preview {
+  display: none;
+}
+
+body.phone-cam-live .frame-canvas {
+  position: static;
+  top: auto;
+  width: auto;
+  max-width: min(480px, 100%);
+  max-height: 70vh;
+  height: auto;
+  transform: scaleX(-1);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
 .raw-cam,
 .frame-canvas {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
+  position: fixed;
+  width: 640px;
+  height: 360px;
+  top: 0;
+  inset-inline-start: 0;
+  transform: translateY(-120vh);
   pointer-events: none;
 }
 
@@ -164,6 +303,80 @@ body {
   background: #ffc46b;
   color: #14161a;
   border-color: #ffc46b;
+}
+
+.orientation-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cut-seconds-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #c5c9d0;
+}
+
+.cut-seconds-wrap[hidden] {
+  display: none;
+}
+
+.cut-seconds-wrap input {
+  width: 72px;
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  direction: ltr;
+}
+
+.split-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.split-picks[hidden] {
+  display: none;
+}
+
+.split-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.split-pick label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.split-pick button {
+  background: #1d2127;
+  color: #f2f2f2;
+  border: 1px solid #2a2e35;
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.split-src {
+  position: fixed;
+  width: 4px;
+  height: 4px;
+  opacity: 0;
+  pointer-events: none;
+  top: 0;
+  inset-inline-start: 0;
 }
 
 .meter-track {
@@ -428,6 +641,24 @@ body {
 
 #tp-live-cam {
   transform: scaleX(-1);
+}
+
+#tp-phone-view {
+  display: none;
+  width: 100%;
+}
+
+body.phone-cam-live #tp-live-cam {
+  display: none;
+}
+
+body.phone-cam-live #tp-phone-view {
+  display: block;
+  transform: scaleX(-1);
+}
+
+body.phone-cam-live #tp-live-cam[hidden] + #tp-phone-view {
+  display: none;
 }
 
 .tp-cam-video[hidden] {

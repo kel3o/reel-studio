@@ -162,6 +162,33 @@
     }, 1000);
   }
 
+  async function ensureReady() {
+    try {
+      if (window.__reel && window.__reel.ensureStream) await window.__reel.ensureStream();
+    } catch (err) {
+      setStatus('دوربین یا میکروفون آماده نیست');
+      return false;
+    }
+    const stream = window.__reel && window.__reel.stream;
+    if (!stream) {
+      setStatus('دوربین یا میکروفون آماده نیست');
+      return false;
+    }
+    if (liveCam.srcObject !== stream) liveCam.srcObject = stream;
+    return true;
+  }
+
+  let arming = false;
+  async function armRecording() {
+    if (state.phase !== 'ready' || arming) return;
+    arming = true;
+    dismissVeil();
+    const ok = await ensureReady();
+    arming = false;
+    if (!ok || state.phase !== 'ready') return;
+    startCountdown();
+  }
+
   function beginRecording() {
     const stream = window.__reel && window.__reel.stream;
     if (!stream) {
@@ -171,6 +198,7 @@
       return;
     }
     if (liveCam.srcObject !== stream) liveCam.srcObject = stream;
+    if (window.__reel && window.__reel.resetCutClock) window.__reel.resetCutClock();
     state.phase = 'recording';
     updateRecordButton();
     setStatus('در حال ضبط، فاصله رو بزن که تموم بشه');
@@ -281,14 +309,11 @@
   }
 
   function toggleRecording() {
-    const veilVisible = !veil.classList.contains('tp-veil-hidden');
-    if (veilVisible) {
-      dismissVeil();
-      if (state.phase === 'ready') startCountdown();
+    if (state.phase === 'recording') {
+      stopRecording();
       return;
     }
-    if (state.phase === 'ready') startCountdown();
-    else if (state.phase === 'recording') stopRecording();
+    if (state.phase === 'ready') armRecording();
   }
 
   function handleKey(e) {
@@ -331,8 +356,7 @@
     fetch(`/api/open-folder?slug=${encodeURIComponent(state.slug)}`, { method: 'POST' }).catch(() => {});
   });
   veilGoBtn.addEventListener('click', () => {
-    dismissVeil();
-    if (state.phase === 'ready') startCountdown();
+    armRecording();
   });
   recordBtn.addEventListener('click', toggleRecording);
   retakeBtn.addEventListener('click', retake);

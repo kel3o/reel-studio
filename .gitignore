@@ -2,7 +2,9 @@ config.json
 takes/
 out/
 assets/
+manual/
 node_modules/
+certs/
 __pycache__/
 *.webm
 *.mp4

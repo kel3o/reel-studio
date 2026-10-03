@@ -13,6 +13,20 @@
       <h1>سناریوها</h1>
       <a href="/help.html" class="help-link">راهنما</a>
     </div>
+    <button id="manual-open" type="button" class="manual-open">سناریوی دستی</button>
+    <form id="manual-form" class="manual-form" hidden>
+      <label>عنوان
+        <input id="manual-title" type="text" maxlength="80" autocomplete="off" />
+      </label>
+      <label>متن
+        <textarea id="manual-text" rows="8" placeholder="هر پاراگراف رو با یه خط خالی جدا کن"></textarea>
+      </label>
+      <p id="manual-error" class="manual-error"></p>
+      <div class="manual-actions">
+        <button id="manual-save" type="submit">ذخیره و باز کن</button>
+        <button id="manual-cancel" type="button">بستن</button>
+      </div>
+    </form>
     <ul id="script-list" class="script-list"></ul>
   </aside>
   <main class="paragraphs-panel">
@@ -29,8 +43,15 @@
           <button id="orientation-landscape" type="button" class="orientation-btn">افقی</button>
           <button id="orientation-square" type="button" class="orientation-btn">۱:۱</button>
           <button id="orientation-vertical" type="button" class="orientation-btn">۹:۱۶</button>
+          <button id="split-cameras" type="button" class="orientation-btn">چند دوربین</button>
+          <button id="rotate-cameras" type="button" class="orientation-btn">برش دوربین</button>
         </div>
       </div>
+      <div id="split-picks" class="split-picks" hidden></div>
+      <label id="cut-seconds-wrap" class="cut-seconds-wrap" hidden>هر چند ثانیه برش
+        <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
+      </label>
+      <p id="phone-hint" class="phone-hint">آدرس گوشی داره آماده می‌شه.</p>
       <video id="preview" class="preview" autoplay muted playsinline></video>
       <video id="raw-cam" class="raw-cam" autoplay muted playsinline></video>
       <canvas id="frame-canvas" class="frame-canvas"></canvas>
@@ -71,6 +92,7 @@
 
       <div class="tp-cam-box">
         <video id="tp-live-cam" class="tp-cam-video" autoplay muted playsinline></video>
+        <canvas id="tp-phone-view" class="tp-cam-video"></canvas>
         <video id="review-video" class="tp-cam-video" hidden></video>
       </div>
 
@@ -94,6 +116,7 @@
     </section>
   </main>
 </div>
+<script src="/phone-studio.js"></script>
 <script src="/devices.js"></script>
 <script src="/capture.js"></script>
 <script src="/app.js"></script>

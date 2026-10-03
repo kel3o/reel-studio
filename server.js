@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { parseScript } = require('./lib/parse-script');
+const { startPhoneBridge, getPhoneLink } = require('./lib/phone-bridge');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -36,6 +37,7 @@ function loadConfig() {
 const config = loadConfig();
 const PORT = config.port || 7180;
 const TAKES_DIR = resolveFromRoot(config.takesDir || './takes');
+const MANUAL_DIR = path.join(ROOT, 'manual');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -73,35 +75,86 @@ function serveStatic(res, pathname) {
       return;
     }
     const ext = path.extname(resolved);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    });
     res.end(data);
   });
 }
 
-function listScripts() {
-  const dir = config.scriptsDir;
+function isInsideDir(root, file) {
+  if (!root) return false;
+  const rel = path.relative(path.resolve(root), path.resolve(file));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function scriptsFromDir(dir, source) {
   if (!dir || !fs.existsSync(dir)) return [];
-  const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md'));
-  const items = files.map((file) => {
-    const full = path.join(dir, file);
-    const stat = fs.statSync(full);
-    const content = fs.readFileSync(full, 'utf8');
-    const { title, paragraphs } = parseScript(content);
-    return {
-      path: full,
-      file,
-      title: title || file,
-      paragraphCount: paragraphs.length,
-      mtime: stat.mtimeMs,
-    };
-  });
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.toLowerCase().endsWith('.md'))
+    .map((file) => {
+      const full = path.join(dir, file);
+      const stat = fs.statSync(full);
+      const content = fs.readFileSync(full, 'utf8');
+      const { title, paragraphs } = parseScript(content);
+      return {
+        path: full,
+        file,
+        source,
+        title: title || file,
+        paragraphCount: paragraphs.length,
+        mtime: stat.mtimeMs,
+      };
+    });
+}
+
+function listScripts() {
+  const items = scriptsFromDir(config.scriptsDir, 'file').concat(scriptsFromDir(MANUAL_DIR, 'manual'));
   items.sort((a, b) => b.mtime - a.mtime);
   return items;
+}
+
+function makeManualSlug(title) {
+  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+  const ascii = String(title)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  const base = ascii ? `manual-${ascii}-${stamp}` : `manual-${stamp}`;
+  let slug = base;
+  let n = 2;
+  while (fs.existsSync(path.join(MANUAL_DIR, `${slug}.md`))) {
+    slug = `${base}-${n}`;
+    n += 1;
+  }
+  return slug;
+}
+
+function buildManualMarkdown(title, text) {
+  const body = String(text).replace(/\r\n/g, '\n').trim();
+  if (/^##\s*متن\s*$/m.test(body)) {
+    const content = /^#\s+\S/m.test(body) ? body : `# ${title}\n\n${body}`;
+    return content.endsWith('\n') ? content : `${content}\n`;
+  }
+  return `# ${title}\n\n## متن\n\n${body}\n`;
 }
 
 const server = http.createServer((req, res) => {
   const parsed = new URL(req.url, 'http://127.0.0.1');
   const pathname = parsed.pathname;
+
+  if (pathname === '/api/phone-link') {
+    sendJson(res, 200, getPhoneLink());
+    return;
+  }
+
+  if (pathname === '/phone') {
+    serveStatic(res, '/phone.html');
+    return;
+  }
 
   if (pathname === '/api/devices-config') {
     sendJson(res, 200, {
@@ -126,9 +179,9 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, { error: 'مسیر فایل لازم است' });
       return;
     }
-    const scriptsDir = config.scriptsDir ? path.resolve(config.scriptsDir) : '';
     const resolved = path.resolve(scriptPath);
-    if (!scriptsDir || !resolved.startsWith(scriptsDir)) {
+    const allowed = isInsideDir(config.scriptsDir, resolved) || isInsideDir(MANUAL_DIR, resolved);
+    if (!allowed || !resolved.toLowerCase().endsWith('.md')) {
       sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
       return;
     }
@@ -144,6 +197,55 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       sendJson(res, 500, { error: err.message });
     }
+    return;
+  }
+
+  if (pathname === '/api/manual-script' && req.method === 'POST') {
+    readRawBody(req)
+      .then((buffer) => {
+        let body;
+        try {
+          body = JSON.parse(buffer.toString('utf8'));
+        } catch (err) {
+          sendJson(res, 400, { error: 'متن قابل خوندن نبود' });
+          return;
+        }
+        const title = String(body.title || '')
+          .replace(/[\r\n#]/g, ' ')
+          .trim()
+          .slice(0, 80);
+        const text = String(body.text || '');
+        if (!title) {
+          sendJson(res, 400, { error: 'یه عنوان بذار' });
+          return;
+        }
+        if (!text.trim()) {
+          sendJson(res, 400, { error: 'متنی ننوشتی' });
+          return;
+        }
+        if (text.length > 100000) {
+          sendJson(res, 400, { error: 'متن خیلی طولانی است' });
+          return;
+        }
+        const markdown = buildManualMarkdown(title, text);
+        const parsedScript = parseScript(markdown);
+        if (!parsedScript.paragraphs.length) {
+          sendJson(res, 400, { error: 'پاراگرافی پیدا نشد' });
+          return;
+        }
+        const slug = makeManualSlug(title);
+        fs.mkdirSync(MANUAL_DIR, { recursive: true });
+        const full = path.join(MANUAL_DIR, `${slug}.md`);
+        fs.writeFileSync(full, markdown, 'utf8');
+        sendJson(res, 200, {
+          path: full,
+          slug,
+          title: parsedScript.title || title,
+          paragraphCount: parsedScript.paragraphs.length,
+          source: 'manual',
+        });
+      })
+      .catch((err) => sendJson(res, 500, { error: err.message }));
     return;
   }
 
@@ -221,6 +323,14 @@ const server = http.createServer((req, res) => {
   }
 
   serveStatic(res, pathname);
+});
+
+const phonePort = Number(config.phonePort) > 0 ? Number(config.phonePort) : PORT + 1;
+startPhoneBridge({
+  httpServer: server,
+  phonePort: phonePort === PORT ? PORT + 1 : phonePort,
+  publicDir: PUBLIC_DIR,
+  root: ROOT,
 });
 
 server.listen(PORT, '127.0.0.1', () => {
