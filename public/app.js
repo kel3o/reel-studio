@@ -316,7 +316,12 @@ function setupManualForm() {
 async function loadScript(scriptPath) {
   const res = await fetch('/api/script?path=' + encodeURIComponent(scriptPath));
   const data = await res.json();
-  document.getElementById('script-title').textContent = data.title || '';
+  const titleEl = document.getElementById('script-title');
+  if (!res.ok || !data || !Array.isArray(data.paragraphs) || !data.paragraphs.length) {
+    titleEl.textContent = (data && data.error) || 'پاراگرافی توی این سناریو نیست';
+    return;
+  }
+  titleEl.textContent = data.title || '';
   if (window.startCaptureSession) {
     window.startCaptureSession(data.slug, data.paragraphs, data.title);
   }

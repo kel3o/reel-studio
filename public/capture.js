@@ -49,15 +49,17 @@
   // rich markup here (bold words, a "مکث" pill) keeps that contract intact
   // instead of pushing it back into the parser.
   function paragraphHtml(p) {
-    const tokens = p.text.split(/\s+/).filter(Boolean);
+    const tokens = String((p && p.text) || '').split(/\s+/).filter(Boolean);
+    const emphasis = p && Array.isArray(p.emphasis) ? p.emphasis : [];
+    const colors = (p && p.emphasisColors) || {};
     let wordIndex = -1;
     return tokens
       .map((token) => {
         if (token === '⏸') return '<span class="pz">مکث</span>';
         wordIndex += 1;
         const text = escapeHtml(token);
-        if (p.emphasis.includes(wordIndex)) {
-          const color = (p.emphasisColors && p.emphasisColors[wordIndex]) || 1;
+        if (emphasis.includes(wordIndex)) {
+          const color = colors[wordIndex] || 1;
           return `<b class="tp-w tp-em tp-em-${color}">${text}</b>`;
         }
         return `<span class="tp-w">${text}</span>`;
@@ -424,9 +426,32 @@
     if (!state.slug) return;
     fetch(`/api/open-folder?slug=${encodeURIComponent(state.slug)}`, { method: 'POST' }).catch(() => {});
   });
-  veilGoBtn.addEventListener('click', () => {
-    armRecording();
-  });
+  function openFromVeil() {
+    if (!state.paragraphs.length) {
+      dismissVeil();
+      setStatus('پاراگرافی برای ضبط نیست');
+      return;
+    }
+    // A finished scenario used to ignore this button, because armRecording
+    // only runs while phase is ready.
+    if (state.phase === 'done') {
+      state.current = 0;
+      state.phase = 'ready';
+      scrollPos = 0;
+      stage.scrollTop = 0;
+      updateRecordButton();
+      renderTeleprompter();
+      renderProgress();
+      setStatus('آماده');
+    }
+    if (state.phase === 'ready') {
+      armRecording();
+      return;
+    }
+    dismissVeil();
+  }
+
+  veilGoBtn.addEventListener('click', openFromVeil);
   recordBtn.addEventListener('click', toggleRecording);
   retakeBtn.addEventListener('click', retake);
   acceptBtn.addEventListener('click', acceptTake);
@@ -465,9 +490,14 @@
   }
 
   window.startCaptureSession = async function (slug, paragraphs, title) {
+    const list = Array.isArray(paragraphs) ? paragraphs : [];
+    if (!list.length) {
+      panel.hidden = true;
+      return;
+    }
     const existing = await loadExistingSession(slug);
     state.slug = slug;
-    state.paragraphs = paragraphs.map((p, i) => {
+    state.paragraphs = list.map((p, i) => {
       const prior = existing && existing.paragraphs && existing.paragraphs[i];
       return {
         index: i,
