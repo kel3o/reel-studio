@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { parseScript } = require('./lib/parse-script');
+const { parseScript, extractTitle, extractEditableBody } = require('./lib/parse-script');
 const { startPhoneBridge, getPhoneLink } = require('./lib/phone-bridge');
 
 const ROOT = __dirname;
@@ -44,6 +44,8 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
 };
 
 function sendJson(res, status, data) {
@@ -200,6 +202,45 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/manual-script' && req.method === 'GET') {
+    const scriptPath = parsed.searchParams.get('path');
+    const fileName = parsed.searchParams.get('file');
+    let resolved = '';
+    if (fileName) {
+      if (!/^[A-Za-z0-9._-]+\.md$/i.test(fileName)) {
+        sendJson(res, 400, { error: 'اسم فایل درست نیست' });
+        return;
+      }
+      resolved = path.join(MANUAL_DIR, fileName);
+    } else if (scriptPath) {
+      resolved = path.resolve(scriptPath);
+    } else {
+      sendJson(res, 400, { error: 'مسیر فایل لازم است' });
+      return;
+    }
+    if (!isInsideDir(MANUAL_DIR, resolved) || !resolved.toLowerCase().endsWith('.md')) {
+      sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+      return;
+    }
+    if (!fs.existsSync(resolved)) {
+      sendJson(res, 404, { error: 'فایل پیدا نشد' });
+      return;
+    }
+    try {
+      const content = fs.readFileSync(resolved, 'utf8');
+      const title = extractTitle(content) || path.basename(resolved, '.md');
+      sendJson(res, 200, {
+        path: resolved,
+        file: path.basename(resolved),
+        title,
+        text: extractEditableBody(content),
+      });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
   if (pathname === '/api/manual-script' && req.method === 'POST') {
     readRawBody(req)
       .then((buffer) => {
@@ -233,13 +274,27 @@ const server = http.createServer((req, res) => {
           sendJson(res, 400, { error: 'پاراگرافی پیدا نشد' });
           return;
         }
-        const slug = makeManualSlug(title);
         fs.mkdirSync(MANUAL_DIR, { recursive: true });
-        const full = path.join(MANUAL_DIR, `${slug}.md`);
+        let full;
+        const editPath = body.path ? path.resolve(String(body.path)) : '';
+        if (editPath) {
+          if (!isInsideDir(MANUAL_DIR, editPath) || !editPath.toLowerCase().endsWith('.md')) {
+            sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+            return;
+          }
+          if (!fs.existsSync(editPath)) {
+            sendJson(res, 404, { error: 'فایل پیدا نشد' });
+            return;
+          }
+          full = editPath;
+        } else {
+          const slug = makeManualSlug(title);
+          full = path.join(MANUAL_DIR, `${slug}.md`);
+        }
         fs.writeFileSync(full, markdown, 'utf8');
         sendJson(res, 200, {
           path: full,
-          slug,
+          slug: path.basename(full, '.md'),
           title: parsedScript.title || title,
           paragraphCount: parsedScript.paragraphs.length,
           source: 'manual',

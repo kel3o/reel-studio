@@ -5,22 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ریل استودیو</title>
 <link rel="stylesheet" href="/style.css" />
+<script>
+  try {
+    if (localStorage.getItem('reel.theme') === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  } catch (e) {}
+</script>
 </head>
 <body>
 <div class="app">
   <aside class="scripts-panel">
     <div class="scripts-panel-head">
       <h1>سناریوها</h1>
-      <a href="/help.html" class="help-link">راهنما</a>
+      <div class="scripts-panel-tools">
+        <button id="theme-toggle" type="button" class="icon-btn theme-toggle" title="حالت روشن یا تیره" aria-label="حالت روشن یا تیره">
+          <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 7 7 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <a href="/help.html" class="icon-btn help-link" title="راهنما" aria-label="راهنما">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.7 2.2c-.9.5-1.3 1-1.3 2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></svg>
+        </a>
+      </div>
     </div>
     <button id="manual-open" type="button" class="manual-open">سناریوی دستی</button>
     <form id="manual-form" class="manual-form" hidden>
+      <input id="manual-path" type="hidden" value="" />
       <label>عنوان
         <input id="manual-title" type="text" maxlength="80" autocomplete="off" />
       </label>
       <label>متن
-        <textarea id="manual-text" rows="8" placeholder="هر پاراگراف رو با یه خط خالی جدا کن"></textarea>
+        <div
+          id="manual-text"
+          class="manual-text-editor"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          data-placeholder="هر پاراگراف رو با یه خط خالی جدا کن. برای تاکید از دکمه‌ی پایین استفاده کن"
+        ></div>
       </label>
+      <div class="manual-tools">
+        <button id="em-color-toggle" type="button" class="manual-emphasize">انتخاب رنگ</button>
+        <button id="manual-emphasize" type="button" class="manual-emphasize">تاکید روی انتخاب</button>
+        <div class="em-colors" id="em-colors" role="group" aria-label="رنگ تاکید" hidden>
+          <button type="button" class="em-color on" data-color="1" title="رنگ ۱" style="--em:#ff3d1f"></button>
+          <button type="button" class="em-color" data-color="2" title="رنگ ۲" style="--em:#ff8a2b"></button>
+          <button type="button" class="em-color" data-color="3" title="رنگ ۳" style="--em:#f5c542"></button>
+          <button type="button" class="em-color" data-color="4" title="رنگ ۴" style="--em:#3ecf8e"></button>
+          <button type="button" class="em-color" data-color="5" title="رنگ ۵" style="--em:#3ba0ff"></button>
+          <button type="button" class="em-color" data-color="6" title="رنگ ۶" style="--em:#e85d8a"></button>
+        </div>
+      </div>
       <p id="manual-error" class="manual-error"></p>
       <div class="manual-actions">
         <button id="manual-save" type="submit">ذخیره و باز کن</button>
@@ -109,8 +144,9 @@
           <kbd>R</kbd> دوباره‌ضبط
           <kbd>Enter</kbd> قبول و بعدی
           <kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول
+          <kbd>چپ</kbd><kbd>راست</kbd> اندازه‌ی متن
         </p>
-        <p>کلمه‌های پررنگ تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
+        <p>کلمه‌های رنگی تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
         <button id="tp-go" type="button">شروع</button>
       </div>
     </section>

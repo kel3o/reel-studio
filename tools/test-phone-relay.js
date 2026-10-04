@@ -188,6 +188,29 @@ async function main() {
     assert.strictEqual(frameId, helloA.id);
     assert.ok(got.data.subarray(1 + idLen).equals(frame));
 
+    studio.sendText(
+      JSON.stringify({
+        type: 'teleprompter',
+        visible: true,
+        scrolling: true,
+        html: '<span class="tp-w">سلام</span>',
+        resetScroll: true,
+      })
+    );
+    async function nextTeleprompter(client, label) {
+      for (let i = 0; i < 8; i++) {
+        const msg = JSON.parse((await withTimeout(client.next(), label + ' ' + i)).data.toString());
+        if (msg.type === 'teleprompter') return msg;
+      }
+      throw new Error('no teleprompter for ' + label);
+    }
+    const tpA = await nextTeleprompter(phoneA, 'tpA');
+    const tpB = await nextTeleprompter(phoneB, 'tpB');
+    assert.strictEqual(tpA.type, 'teleprompter');
+    assert.strictEqual(tpB.type, 'teleprompter');
+    assert.strictEqual(tpA.visible, true);
+    assert.ok(String(tpA.html).includes('سلام'));
+
     phoneA.end();
     phoneB.end();
     studio.end();

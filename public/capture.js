@@ -56,9 +56,61 @@
         if (token === '⏸') return '<span class="pz">مکث</span>';
         wordIndex += 1;
         const text = escapeHtml(token);
-        return p.emphasis.includes(wordIndex) ? `<b>${text}</b>` : text;
+        if (p.emphasis.includes(wordIndex)) {
+          const color = (p.emphasisColors && p.emphasisColors[wordIndex]) || 1;
+          return `<b class="tp-w tp-em tp-em-${color}">${text}</b>`;
+        }
+        return `<span class="tp-w">${text}</span>`;
       })
       .join(' ');
+  }
+
+  function currentParagraphHtml() {
+    const p = state.paragraphs[state.current];
+    return p ? paragraphHtml(p) : '';
+  }
+
+  function pushTeleprompter(extra) {
+    const api = window.__reelPhone;
+    if (!api || !api.sendTeleprompter) return;
+    const payload = Object.assign(
+      {
+        visible: state.phase !== 'idle' && state.phase !== 'done',
+        scrolling: state.phase === 'recording',
+        html: currentParagraphHtml(),
+        index: state.current,
+        total: state.paragraphs.length,
+      },
+      extra || {}
+    );
+    api.sendTeleprompter(payload);
+  }
+
+  function markActiveLine() {
+    const current = textEl.querySelector('.tp-paragraph.tp-current');
+    textEl.querySelectorAll('.tp-w.tp-line-on').forEach((el) => el.classList.remove('tp-line-on'));
+    if (!current) return;
+    const words = current.querySelectorAll('.tp-w');
+    if (!words.length) return;
+    const stageRect = stage.getBoundingClientRect();
+    const eyeY = stageRect.top + stageRect.height * 0.22;
+    let best = null;
+    let bestDist = Infinity;
+    words.forEach((word) => {
+      const rect = word.getBoundingClientRect();
+      if (rect.bottom < stageRect.top || rect.top > stageRect.bottom) return;
+      const mid = (rect.top + rect.bottom) / 2;
+      const dist = Math.abs(mid - eyeY);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = word;
+      }
+    });
+    if (!best) return;
+    const lineTop = best.offsetTop;
+    words.forEach((word) => {
+      if (Math.abs(word.offsetTop - lineTop) <= 1) word.classList.add('tp-line-on');
+    });
   }
 
   let speed = 3;
@@ -113,6 +165,8 @@
       div.innerHTML = paragraphHtml(p);
       textEl.appendChild(div);
     });
+    markActiveLine();
+    pushTeleprompter();
   }
 
   function renderProgress() {
@@ -147,6 +201,7 @@
   function startCountdown() {
     state.phase = 'countdown';
     updateRecordButton();
+    pushTeleprompter({ visible: true, scrolling: false, resetScroll: true });
     let n = 3;
     setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
     recordBtn.textContent = faNum(n);
@@ -215,6 +270,7 @@
     recorder.onstop = onRecordingStopped;
     state.mediaRecorder = recorder;
     recorder.start();
+    pushTeleprompter({ visible: true, scrolling: true, resetScroll: true });
   }
 
   function stopRecording() {
@@ -251,6 +307,7 @@
     updateRecordButton();
     setStatus('پخش دوباره، Enter برای قبول، R برای دوباره‌ضبط');
     renderProgress();
+    pushTeleprompter({ scrolling: false });
   }
 
   async function saveSession() {
@@ -286,6 +343,8 @@
       state.current += 1;
       state.phase = 'ready';
       setStatus('آماده');
+      scrollPos = 0;
+      stage.scrollTop = 0;
     } else {
       state.phase = 'done';
       setStatus('همه‌ی پاراگراف‌ها ضبط شد');
@@ -293,6 +352,7 @@
     updateRecordButton();
     renderTeleprompter();
     renderProgress();
+    if (state.phase === 'done') pushTeleprompter({ visible: false, scrolling: false });
   }
 
   function retake() {
@@ -302,6 +362,7 @@
     state.phase = 'ready';
     updateRecordButton();
     setStatus('آماده، دوباره ضبط کن');
+    pushTeleprompter({ scrolling: false, resetScroll: true });
   }
 
   function dismissVeil() {
@@ -327,6 +388,12 @@
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSpeed(speed - 1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      setFontSize(fontSize + 4);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setFontSize(fontSize - 4);
     } else if (e.key === 'r' || e.key === 'R') {
       if (state.phase === 'review') retake();
     } else if (e.key === 'Enter') {
@@ -338,6 +405,8 @@
   closeBtn.addEventListener('click', () => {
     const isFull = panel.classList.toggle('fullscreen');
     closeBtn.textContent = isFull ? 'بستن' : 'تمام‌صفحه';
+    if (!isFull) pushTeleprompter({ visible: false, scrolling: false });
+    else pushTeleprompter();
   });
   slowerBtn.addEventListener('click', () => setSpeed(speed - 1));
   fasterBtn.addEventListener('click', () => setSpeed(speed + 1));
@@ -379,6 +448,7 @@
 
     const max = stage.scrollHeight - stage.clientHeight;
     bar.style.width = (max > 0 ? (stage.scrollTop / max) * 100 : 0) + '%';
+    markActiveLine();
 
     requestAnimationFrame(frame);
   }
@@ -403,6 +473,7 @@
         index: i,
         text: p.text,
         emphasis: p.emphasis || [],
+        emphasisColors: p.emphasisColors || {},
         takes: prior ? prior.takes || [] : [],
         accepted: prior ? prior.accepted || null : null,
       };

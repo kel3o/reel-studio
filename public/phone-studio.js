@@ -17,6 +17,23 @@
       });
       return list;
     },
+    mics: function () {
+      const list = [];
+      phones.forEach(function (phone) {
+        if (!phone.audioTrack || phone.audioTrack.readyState === 'ended') return;
+        list.push({
+          id: phone.id,
+          label: String(phone.label || 'دوربین موبایل').replace(/^دوربین/, 'میکروفون'),
+          track: phone.audioTrack,
+        });
+      });
+      return list;
+    },
+    audioStreamFor: function (id) {
+      const phone = phones.get(id);
+      if (!phone || !phone.audioTrack || phone.audioTrack.readyState === 'ended') return null;
+      return new MediaStream([phone.audioTrack]);
+    },
     canvasFor: function (id) {
       const phone = phones.get(id);
       return phone ? phone.canvas : null;
@@ -40,13 +57,78 @@
 
   function publish() {
     syncHead();
-    const signature = api.cameras().map(function (phone) {
-      return phone.id + ':' + phone.label;
-    }).join('|');
+    const signature = api
+      .cameras()
+      .map(function (phone) {
+        return phone.id + ':' + phone.label;
+      })
+      .concat(
+        api.mics().map(function (mic) {
+          return 'm:' + mic.id;
+        })
+      )
+      .join('|');
     const changed = signature !== listSig;
     listSig = signature;
     renderHint();
     if (changed && statusHandler) statusHandler(api.connected);
+  }
+
+  function stopPhoneAudio(phone) {
+    if (!phone) return;
+    if (phone.audioTrack) {
+      try {
+        phone.audioTrack.stop();
+      } catch (err) {
+        // already ended
+      }
+      phone.audioTrack = null;
+    }
+    if (phone.audioCtx) {
+      phone.audioCtx.close().catch(function () {});
+      phone.audioCtx = null;
+    }
+    phone.audioNext = 0;
+  }
+
+  function ensurePhoneAudio(phone, sampleRate) {
+    const rate = sampleRate > 0 ? sampleRate : 48000;
+    if (phone.audioCtx && phone.audioTrack && phone.audioTrack.readyState !== 'ended') {
+      return phone.audioCtx;
+    }
+    stopPhoneAudio(phone);
+    phone.audioCtx = new AudioContext({ sampleRate: rate });
+    phone.audioDest = phone.audioCtx.createMediaStreamDestination();
+    phone.audioTrack = phone.audioDest.stream.getAudioTracks()[0] || null;
+    phone.audioNext = 0;
+    if (phone.audioCtx.state === 'suspended') phone.audioCtx.resume().catch(function () {});
+    return phone.audioCtx;
+  }
+
+  function pushPhoneAudio(phone, payload) {
+    if (!payload || payload.length < 4) return;
+    const sampleRate = payload[0] | (payload[1] << 8);
+    const pcmBytes = payload.subarray(2);
+    if (pcmBytes.byteLength < 2 || pcmBytes.byteLength % 2) return;
+    const ctx = ensurePhoneAudio(phone, sampleRate || 48000);
+    if (!ctx || !phone.audioDest) return;
+    const samples = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength / 2);
+    const floats = new Float32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) floats[i] = samples[i] / 32768;
+    const rate = sampleRate || ctx.sampleRate || 48000;
+    const buffer = ctx.createBuffer(1, floats.length, rate);
+    buffer.copyToChannel(floats, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(phone.audioDest);
+    const now = ctx.currentTime;
+    if (!phone.audioNext || phone.audioNext < now) phone.audioNext = now + 0.04;
+    src.start(phone.audioNext);
+    phone.audioNext += buffer.duration;
+    if (!phone.audioListed) {
+      phone.audioListed = true;
+      publish();
+    }
   }
 
   function dropPhone(id) {
@@ -59,6 +141,7 @@
         // already closed
       }
     }
+    stopPhoneAudio(phone);
     phones.delete(id);
   }
 
@@ -80,6 +163,11 @@
         mode: 'video',
         paintGen: 0,
         hasFrame: false,
+        audioCtx: null,
+        audioDest: null,
+        audioTrack: null,
+        audioNext: 0,
+        audioListed: false,
       };
       phones.set(id, phone);
     } else if (label) {
@@ -149,6 +237,12 @@
     lastAsk = now;
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'need-key', id: id || '' }));
   }
+
+  api.sendTeleprompter = function (payload) {
+    if (!ws || ws.readyState !== 1) return;
+    const msg = Object.assign({ type: 'teleprompter' }, payload || {});
+    ws.send(JSON.stringify(msg));
+  };
 
   function b64ToU8(b64) {
     const binary = atob(b64);
@@ -224,10 +318,15 @@
     }
     noteLag(sent);
     const payload = body.subarray(9);
-    if (kind === 3 || phone.mode === 'jpeg') {
+    if (kind === 4) {
+      pushPhoneAudio(phone, payload);
+      return;
+    }
+    if (kind === 3) {
       paintJpeg(phone, payload);
       return;
     }
+    if (phone.mode === 'jpeg') return;
     if (!phone.decoder || phone.decoder.state !== 'configured') return;
     if (phone.decoder.decodeQueueSize > 1) {
       phone.waitingKey = true;

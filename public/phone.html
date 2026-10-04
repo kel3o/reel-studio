@@ -8,6 +8,22 @@
 </head>
 <body>
   <video id="view" class="mirror" autoplay muted playsinline></video>
+
+  <div id="tp-layer" class="tp-layer" hidden>
+    <div class="tp-eye"></div>
+    <div id="tp-stage" class="tp-stage">
+      <div id="tp-text" class="tp-text"></div>
+    </div>
+  </div>
+
+  <div id="tp-chrome" class="tp-chrome" hidden>
+    <button id="tp-slower" type="button">کندتر</button>
+    <span id="tp-speed" class="tp-speed">۳</span>
+    <button id="tp-faster" type="button">تندتر</button>
+  </div>
+
+  <button id="tp-toggle" type="button" class="tp-toggle" hidden>متن</button>
+
   <div class="panel">
     <h1>دوربین موبایل</h1>
     <p id="status">بزن تا تصویر گوشی بره روی لپ‌تاپ.</p>
@@ -17,6 +33,6 @@
     </div>
     <p class="note">صدا از میکروفون لپ‌تاپ ضبط می‌شه. این صفحه رو باز نگه دار و نذار صفحه‌ی گوشی خاموش بشه.</p>
   </div>
-<script src="/phone.js?v=3"></script>
+<script src="/phone.js?v=5"></script>
 </body>
 </html>

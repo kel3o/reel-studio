@@ -148,12 +148,52 @@
     return pick;
   }
 
+  function isPhoneMic(id) {
+    return typeof id === 'string' && id.indexOf('phone-mic:') === 0;
+  }
+
+  function phoneMicId(id) {
+    return isPhoneMic(id) ? id.slice('phone-mic:'.length) : '';
+  }
+
+  function renderMicSelect(preferredName) {
+    const previous = micSelect.value;
+    const storedId = loadStoredId('reel.micId');
+    micSelect.innerHTML = '';
+    state.mics.forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || 'دستگاه بدون اسم';
+      micSelect.appendChild(opt);
+    });
+    if (window.__reelPhone && window.__reelPhone.mics) {
+      window.__reelPhone.mics().forEach((mic) => {
+        const opt = document.createElement('option');
+        opt.value = 'phone-mic:' + mic.id;
+        opt.textContent = mic.label || 'میکروفون موبایل';
+        micSelect.appendChild(opt);
+      });
+    }
+    const ids = Array.from(micSelect.options).map((opt) => opt.value);
+    let pick = '';
+    if (previous && ids.includes(previous)) pick = previous;
+    else if (storedId && ids.includes(storedId)) pick = storedId;
+    else if (preferredName) {
+      const match = state.mics.find((d) => d.label.includes(preferredName));
+      if (match) pick = match.deviceId;
+    }
+    if (!pick && state.mics.length) pick = state.mics[0].deviceId;
+    if (!pick && ids.length) pick = ids[0];
+    if (pick) micSelect.value = pick;
+    return pick;
+  }
+
   async function enumerate(preferredCamera, preferredMic) {
     const devices = await navigator.mediaDevices.enumerateDevices();
     state.cameras = devices.filter((d) => d.kind === 'videoinput');
     state.mics = devices.filter((d) => d.kind === 'audioinput');
     const camId = renderCameraSelect(preferredCamera);
-    const micId = fillSelect(micSelect, state.mics, preferredMic, loadStoredId('reel.micId'));
+    const micId = renderMicSelect(preferredMic);
     return { camId, micId };
   }
 
@@ -225,10 +265,56 @@
     if (err && err.message === 'no-video-size' && cameraSelect.value === 'phone') {
       return 'از گوشی تصویری نمیاد. صفحه‌ی دوربین گوشی رو باز نگه دار';
     }
+    if (err && err.message === 'phone-mic') {
+      return 'میکروفون گوشی هنوز آماده نیست. صفحه‌ی گوشی رو باز نگه دار و چند ثانیه صبر کن';
+    }
     return 'دوربین یا میکروفون باز نشد';
   }
 
+  async function openPhoneMicStream(micId) {
+    const id = phoneMicId(micId);
+    const stream = window.__reelPhone && window.__reelPhone.audioStreamFor
+      ? window.__reelPhone.audioStreamFor(id)
+      : null;
+    const track = stream && stream.getAudioTracks()[0];
+    if (!track || track.readyState === 'ended') {
+      throw new Error('phone-mic');
+    }
+    // Clone so stopping a preview stream never kills the shared phone mic.
+    return new MediaStream([track.clone()]);
+  }
+
   async function openDevices(camId, micId) {
+    if (isPhoneMic(micId)) {
+      const videoAttempts = [
+        {
+          video: Object.assign(
+            { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+            camId && !String(camId).startsWith('phone') ? { deviceId: { ideal: camId } } : {}
+          ),
+          audio: false,
+        },
+        {
+          video: camId && !String(camId).startsWith('phone') ? { deviceId: { ideal: camId } } : true,
+          audio: false,
+        },
+      ];
+      let videoStream = null;
+      let lastErr;
+      for (const constraints of videoAttempts) {
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (!videoStream) throw lastErr || new Error('camera');
+      const audioStream = await openPhoneMicStream(micId);
+      return new MediaStream(
+        videoStream.getVideoTracks().concat(audioStream.getAudioTracks())
+      );
+    }
     const attempts = [
       {
         video: Object.assign(
@@ -258,6 +344,7 @@
   }
 
   async function openMic(micId) {
+    if (isPhoneMic(micId)) return openPhoneMicStream(micId);
     const attempts = [
       {
         audio: Object.assign(
@@ -927,14 +1014,23 @@
       label.appendChild(input);
       label.appendChild(name);
       row.appendChild(label);
-      if (index > 0) {
-        const up = document.createElement('button');
-        up.type = 'button';
-        up.textContent = 'بالاتر';
-        up.disabled = captureBusy();
-        up.addEventListener('click', () => moveSplit(id, -1));
-        row.appendChild(up);
-      }
+      const order = document.createElement('div');
+      order.className = 'split-order';
+      const up = document.createElement('button');
+      up.type = 'button';
+      up.textContent = '▲';
+      up.title = 'بالا';
+      up.disabled = captureBusy() || index === 0;
+      up.addEventListener('click', () => moveSplit(id, -1));
+      const down = document.createElement('button');
+      down.type = 'button';
+      down.textContent = '▼';
+      down.title = 'پایین';
+      down.disabled = captureBusy() || index >= state.splitOrder.length - 1;
+      down.addEventListener('click', () => moveSplit(id, 1));
+      order.appendChild(up);
+      order.appendChild(down);
+      row.appendChild(order);
       box.appendChild(row);
     });
   }
@@ -1096,8 +1192,15 @@
     if (window.__reelPhone) {
       window.__reelPhone.onStatus = (connected) => {
         const before = cameraSelect.value;
+        const micBefore = micSelect.value;
         renderCameraSelect(preferredCamera);
+        renderMicSelect(preferredMic);
         if (!devicesReady) return;
+        if (isPhoneMic(micBefore) && micSelect.value !== micBefore && !captureBusy()) {
+          startPreview(cameraSelect.value, micSelect.value).catch((err) => {
+            if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+          });
+        }
         if (multiActive()) {
           if (!connected) state.phoneNote = 'دوربین موبایل قطع شد';
           renderReadiness();
