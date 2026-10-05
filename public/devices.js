@@ -65,11 +65,9 @@
   }
   state.resetCutClock = resetCutClock;
 
-  const orientationButtons = {
-    landscape: document.getElementById('orientation-landscape'),
-    square: document.getElementById('orientation-square'),
-    vertical: document.getElementById('orientation-vertical'),
-  };
+  function orientationButtons() {
+    return document.querySelectorAll('[data-orientation]');
+  }
 
   function loadStoredId(key) {
     try {
@@ -120,20 +118,12 @@
     const previous = cameraSelect.value;
     const storedId = loadStoredId('reel.cameraId');
     cameraSelect.innerHTML = '';
-    state.cameras.forEach((d) => {
+    cameraChoices().forEach((item) => {
       const opt = document.createElement('option');
-      opt.value = d.deviceId;
-      opt.textContent = d.label || 'دستگاه بدون اسم';
+      opt.value = item.id;
+      opt.textContent = item.label || 'دستگاه بدون اسم';
       cameraSelect.appendChild(opt);
     });
-    if (window.__reelPhone && window.__reelPhone.cameras) {
-      window.__reelPhone.cameras().forEach((phone) => {
-        const phoneOpt = document.createElement('option');
-        phoneOpt.value = 'phone:' + phone.id;
-        phoneOpt.textContent = phone.label || 'دوربین موبایل';
-        cameraSelect.appendChild(phoneOpt);
-      });
-    }
     const ids = Array.from(cameraSelect.options).map((opt) => opt.value);
     let pick = '';
     if (previous && ids.includes(previous)) pick = previous;
@@ -693,36 +683,59 @@
       id: cam.deviceId,
       label: cam.label || 'دوربین',
     }));
+    const seen = new Set();
+    if (!state.phoneSticky) state.phoneSticky = {};
     if (window.__reelPhone && window.__reelPhone.cameras) {
       window.__reelPhone.cameras().forEach((phone) => {
-        list.push({ id: 'phone:' + phone.id, label: phone.label || 'دوربین موبایل' });
+        const id = 'phone:' + phone.id;
+        seen.add(id);
+        // Keep for the whole page session. Expiry caused برش دوربین flicker.
+        state.phoneSticky[id] = {
+          label: phone.label || 'دوربین موبایل',
+          until: Number.MAX_SAFE_INTEGER,
+        };
+        list.push({ id: id, label: state.phoneSticky[id].label });
       });
     }
+    Object.keys(state.phoneSticky).forEach((id) => {
+      if (seen.has(id)) return;
+      const row = state.phoneSticky[id];
+      if (!row) {
+        delete state.phoneSticky[id];
+        return;
+      }
+      list.push({ id: id, label: row.label || 'دوربین موبایل' });
+    });
     return list;
   }
 
   function syncSplitLists() {
     const choices = cameraChoices();
     const ids = choices.map((item) => item.id);
+    const idSet = new Set(ids);
     let order = readList('reel.splitOrder') || [];
     let enabled = readList('reel.splitOn');
     const seen = readList('reel.splitSeen') || [];
     ids.forEach((id) => {
       if (!order.includes(id)) order.push(id);
     });
-    order = order.filter((id) => ids.includes(id));
+    // Keep sticky phone rows even if the live socket blinked away.
+    order = order.filter(
+      (id) => idSet.has(id) || (id.indexOf('phone:') === 0 && state.phoneSticky && state.phoneSticky[id])
+    );
     if (!enabled) {
       enabled = order.slice();
     } else {
+      const prevEnabled = enabled.slice();
       ids.forEach((id) => {
-        if (!seen.includes(id) && !enabled.includes(id)) enabled.push(id);
+        if (!seen.includes(id) && !prevEnabled.includes(id)) prevEnabled.push(id);
       });
-      enabled = order.filter((id) => enabled.includes(id));
+      enabled = order.filter((id) => prevEnabled.includes(id));
     }
     if (!enabled.length && order.length) enabled = [order[0]];
     writeList('reel.splitOrder', order);
     writeList('reel.splitOn', enabled);
-    writeList('reel.splitSeen', ids);
+    writeList('reel.splitSeen', Array.from(new Set(seen.concat(ids))));
     state.splitOrder = order;
     state.splitOn = enabled;
     return choices;
@@ -928,14 +941,19 @@
   }
 
   function renderReadiness() {
-    const d = readiness.dataset;
-    const level = Math.round(state.meterValue);
-    let text = `دوربین: ${d.camera || ''} (${d.resolution || ''})، میکروفون: ${d.mic || ''}، سطح: ${level} dBFS`;
-    if (state.silentWarning) text += '، صدایی نمیاد';
-    if (state.phoneNote) text += '، ' + state.phoneNote;
-    readiness.textContent = text;
+    if (!readiness) return;
+    readiness.textContent = 'وضعیت میکروفون';
+    readiness.classList.add('mic-status');
+    readiness.classList.remove('is-error');
     readiness.classList.toggle('clip-warning', state.meterValue > -3);
     readiness.classList.toggle('silent-warning', !!state.silentWarning);
+  }
+
+  function showMediaError(err) {
+    if (!readiness) return;
+    readiness.textContent = mediaErrorText(err);
+    readiness.classList.remove('mic-status', 'clip-warning', 'silent-warning');
+    readiness.classList.add('is-error');
   }
 
   let silenceStart = null;
@@ -974,10 +992,17 @@
   }
 
   function renderOrientationButtons() {
-    Object.keys(orientationButtons).forEach((key) => {
-      orientationButtons[key].classList.toggle('on', state.orientation === key);
-      orientationButtons[key].disabled = !!state.split;
+    orientationButtons().forEach((btn) => {
+      const key = btn.getAttribute('data-orientation');
+      btn.classList.toggle('on', state.orientation === key);
+      btn.disabled = !!state.split;
     });
+    const home = document.getElementById('stage-home');
+    if (home) {
+      home.classList.toggle('is-landscape', state.orientation === 'landscape');
+      home.classList.toggle('is-square', state.orientation === 'square');
+      home.classList.toggle('is-vertical', state.orientation === 'vertical' || !!state.split);
+    }
   }
 
   function renderSplitPicks() {
@@ -987,6 +1012,7 @@
     if (!multiActive()) {
       box.hidden = true;
       box.replaceChildren();
+      state.splitPickSig = '';
       return;
     }
     const choices = syncSplitLists();
@@ -994,6 +1020,14 @@
     choices.forEach((item) => {
       byId[item.id] = item;
     });
+    const signature = state.splitOrder
+      .map((id) => id + ':' + (byId[id] ? byId[id].label : '') + ':' + (state.splitOn.includes(id) ? '1' : '0'))
+      .join('|');
+    if (signature && signature === state.splitPickSig && box.childElementCount) {
+      box.hidden = false;
+      return;
+    }
+    state.splitPickSig = signature;
     box.hidden = false;
     box.replaceChildren();
     state.splitOrder.forEach((id, index) => {
@@ -1058,7 +1092,7 @@
     try {
       await startPreview(cameraSelect.value, micSelect.value);
     } catch (err) {
-      if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+      if (!streamIsLive()) showMediaError(err);
     }
   }
 
@@ -1123,7 +1157,7 @@
     try {
       await startPreview(cameraSelect.value, micSelect.value);
     } catch (err) {
-      if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+      if (!streamIsLive()) showMediaError(err);
     }
   }
 
@@ -1141,7 +1175,7 @@
     try {
       await startPreview(cameraSelect.value, micSelect.value);
     } catch (err) {
-      if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+      if (!streamIsLive()) showMediaError(err);
     }
   }
 
@@ -1155,8 +1189,8 @@
     if (state.split) state.orientation = 'vertical';
     renderSplitButton();
     renderOrientationButtons();
-    Object.keys(orientationButtons).forEach((key) => {
-      orientationButtons[key].addEventListener('click', () => setOrientation(key));
+    orientationButtons().forEach((btn) => {
+      btn.addEventListener('click', () => setOrientation(btn.getAttribute('data-orientation')));
     });
 
     const { preferredCamera, preferredMic } = await fetchPreferredNames();
@@ -1168,7 +1202,7 @@
       try {
         await startPreview(cameraSelect.value, micSelect.value);
       } catch (err) {
-        if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+        if (!streamIsLive()) showMediaError(err);
       }
     });
     micSelect.addEventListener('change', async () => {
@@ -1176,7 +1210,7 @@
       try {
         await startPreview(cameraSelect.value, micSelect.value);
       } catch (err) {
-        if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+        if (!streamIsLive()) showMediaError(err);
       }
     });
 
@@ -1184,53 +1218,67 @@
       enumerate(preferredCamera, preferredMic).then(() => {
         if (!devicesReady || !multiActive() || captureBusy()) return;
         startPreview(cameraSelect.value, micSelect.value).catch((err) => {
-          if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+          if (!streamIsLive()) showMediaError(err);
         });
       });
     });
 
     if (window.__reelPhone) {
+      let phoneStatusTimer = 0;
       window.__reelPhone.onStatus = (connected) => {
-        const before = cameraSelect.value;
-        const micBefore = micSelect.value;
-        renderCameraSelect(preferredCamera);
-        renderMicSelect(preferredMic);
-        if (!devicesReady) return;
-        if (isPhoneMic(micBefore) && micSelect.value !== micBefore && !captureBusy()) {
-          startPreview(cameraSelect.value, micSelect.value).catch((err) => {
-            if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
-          });
-        }
-        if (multiActive()) {
-          if (!connected) state.phoneNote = 'دوربین موبایل قطع شد';
+        if (phoneStatusTimer) clearTimeout(phoneStatusTimer);
+        phoneStatusTimer = setTimeout(() => {
+          phoneStatusTimer = 0;
+          const before = cameraSelect.value;
+          const micBefore = micSelect.value;
+          renderCameraSelect(preferredCamera);
+          renderMicSelect(preferredMic);
+          if (!devicesReady) return;
+          // Prefer keeping the current phone selection if it is still listed.
+          if (before && Array.from(cameraSelect.options).some((opt) => opt.value === before)) {
+            cameraSelect.value = before;
+          }
+          if (micBefore && Array.from(micSelect.options).some((opt) => opt.value === micBefore)) {
+            micSelect.value = micBefore;
+          }
+          if (isPhoneMic(micBefore) && micSelect.value !== micBefore && !captureBusy()) {
+            startPreview(cameraSelect.value, micSelect.value).catch((err) => {
+              if (!streamIsLive()) showMediaError(err);
+            });
+          }
+          if (multiActive()) {
+            if (!connected) state.phoneNote = 'دوربین موبایل قطع شد';
+            else state.phoneNote = '';
+            renderReadiness();
+            renderSplitPicks();
+            // Never bounce the live multi preview on a status blink. Phone
+            // canvas keeps painting; restarting here made the picker flicker.
+            return;
+          }
+          const chosenGone =
+            (before === 'phone' || (typeof before === 'string' && before.indexOf('phone:') === 0)) &&
+            cameraSelect.value !== before;
+          if (chosenGone && !captureBusy()) {
+            startPreview(cameraSelect.value, micSelect.value).catch((err) => {
+              if (!streamIsLive()) showMediaError(err);
+            });
+            return;
+          }
+          if (connected) {
+            state.phoneNote = '';
+            if (readiness.dataset.camera) renderReadiness();
+            return;
+          }
+          if (!(before === 'phone' || (typeof before === 'string' && before.indexOf('phone:') === 0))) return;
+          state.phoneNote = 'دوربین موبایل قطع شد';
           renderReadiness();
           if (captureBusy()) return;
+          if (!cameraSelect.value || cameraSelect.value === 'phone') return;
+          storeId('reel.cameraId', cameraSelect.value);
           startPreview(cameraSelect.value, micSelect.value).catch((err) => {
-            if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+            if (!streamIsLive()) showMediaError(err);
           });
-          return;
-        }
-        const chosenGone = (before === 'phone' || (typeof before === 'string' && before.indexOf('phone:') === 0)) && cameraSelect.value !== before;
-        if (chosenGone && !captureBusy()) {
-          startPreview(cameraSelect.value, micSelect.value).catch((err) => {
-            if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
-          });
-          return;
-        }
-        if (connected) {
-          state.phoneNote = '';
-          if (readiness.dataset.camera) renderReadiness();
-          return;
-        }
-        if (before !== 'phone') return;
-        state.phoneNote = 'دوربین موبایل قطع شد';
-        renderReadiness();
-        if (captureBusy()) return;
-        if (!cameraSelect.value || cameraSelect.value === 'phone') return;
-        storeId('reel.cameraId', cameraSelect.value);
-        startPreview(cameraSelect.value, micSelect.value).catch((err) => {
-          if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
-        });
+        }, 250);
       };
     }
 
@@ -1258,7 +1306,7 @@
     try {
       await startPreview(cameraSelect.value, micSelect.value);
     } catch (err) {
-      readiness.textContent = mediaErrorText(err);
+      showMediaError(err);
       return;
     }
 
@@ -1271,7 +1319,7 @@
       try {
         await startPreview(camWanted, micWanted);
       } catch (err) {
-        if (!streamIsLive()) readiness.textContent = mediaErrorText(err);
+        if (!streamIsLive()) showMediaError(err);
       }
     }
     storeId('reel.cameraId', cameraSelect.value);
@@ -1279,5 +1327,22 @@
   }
 
   state.ensureStream = ensureStream;
+  state.cameraLabels = function () {
+    if (!multiActive()) return [];
+    const order = state.splitOrder || [];
+    const on = state.splitOn || [];
+    const labels = [];
+    order.forEach((id) => {
+      if (!on.includes(id)) return;
+      const cam = (state.cameras || []).find((item) => item.deviceId === id);
+      const phone =
+        window.__reelPhone && window.__reelPhone.cameras
+          ? window.__reelPhone.cameras().find((item) => item.id === id || item.deviceId === id)
+          : null;
+      labels.push((cam && cam.label) || (phone && phone.label) || id);
+    });
+    return labels;
+  };
+  window.__reelDevices = state;
   initDevices();
 })();

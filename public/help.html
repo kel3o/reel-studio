@@ -10,10 +10,26 @@
     if (localStorage.getItem('reel.theme') === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
     }
+    var ui = localStorage.getItem('reel.uiScale');
+    if (ui === 'lg' || ui === 'xl') document.documentElement.setAttribute('data-ui', ui);
   } catch (e) {}
 </script>
 </head>
 <body class="help-body">
+<header class="site-header">
+  <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
+  <nav class="site-nav" aria-label="منو">
+    <a href="/" data-nav="home">داشبورد</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <button type="button" id="maker-open">سازنده</button>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/help.html" data-nav="help">راهنما</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/?settings=1" data-nav="settings" id="nav-settings">تنظیمات</a>
+  </nav>
+</header>
 <div class="help-page">
   <a href="/" class="back-btn">بازگشت</a>
   <h1>راهنمای ریل استودیو</h1>
@@ -22,14 +38,14 @@
   <div class="help-grid">
     <section class="help-section">
       <h2>۱. نوشتن سناریو</h2>
-      <p>«سناریوی دستی» رو بزن. عنوان و متن رو بنویس، بعد «ذخیره و باز کن». هر پاراگراف با یه خط خالی جدا می‌شه.</p>
-      <p>برای رنگ، یه تکه رو انتخاب کن، «انتخاب رنگ»، بعد «تاکید روی انتخاب». سناریوهای ذخیره‌شده توی فهرست می‌مونن و با «ویرایش» همون متن برمی‌گرده.</p>
+      <p>«سناریوی دستی» رو بزن. تو صفحهٔ خودش عنوان و متن رو بنویس، بعد «ذخیره و باز کن». هر پاراگراف با یه خط خالی جدا می‌شه.</p>
+      <p>برای رنگ، یه تکه رو انتخاب کن، «انتخاب رنگ»، بعد «تاکید روی انتخاب». سناریوهای ذخیره‌شده توی فهرست می‌مونن و با «ویرایش» همون صفحهٔ نوشتن باز می‌شه.</p>
     </section>
 
     <section class="help-section">
       <h2>۲. دوربین و صدا</h2>
-      <p>دوربین و میکروفون رو بالا انتخاب کن. REDRAGON و میکروفون کاندنسر اگه وصل باشن خودشون میان. نوار صدا باید با حرف زدن تکون بخوره.</p>
-      <p>برای دوربین گوشی، گوشی و لپ‌تاپ رو به یه وای‌فای وصل کن. آدرس بالای تصویر رو توی کروم گوشی باز کن و «شروع» رو بزن. چند گوشی همزمان می‌شه. صدا همون میکروفون لپ‌تاپه.</p>
+      <p>دوربین، میکروفون و نسبت تصویر توی «تنظیمات» هستن. REDRAGON و میکروفون کاندنسر اگه وصل باشن خودشون میان. نوار صدا باید با حرف زدن تکون بخوره.</p>
+      <p>برای دوربین گوشی، گوشی و لپ‌تاپ رو به یه وای‌فای وصل کن. آدرس گوشی رو از سرور بگیر (معمولاً روی پورت ۷۱۸۱ و مسیر /phone)، توی کروم گوشی بازش کن. اگه هشدار امنیتی اومد، ادامه رو بزن و «شروع» رو بزن. بعدش دوربین موبایل توی لیست دوربین میاد. چند گوشی همزمان می‌شه. صدا همون میکروفون لپ‌تاپه.</p>
     </section>
 
     <section class="help-section">
@@ -59,44 +75,16 @@
       <p>شماره‌های پایین، پاراگراف‌ها هستن. سبز یعنی قبول شده. روی شماره بزن و برگرد همون‌جا، حتی اگه ضبط رو نصفه گذاشته باشی.</p>
       <p>«پوشه» کلیپ‌های همین سناریو رو باز می‌کنه.</p>
     </section>
+
+    <section class="help-section">
+      <h2>۷. بایگانی و زیرنویس</h2>
+      <p>وقتی همه‌ی پاراگراف‌ها قبول شد، از «زیرنویس» یا «بایگانی» برو سراغ همون ضبط. متن روی مدت ویدیو چیده می‌شه.</p>
+      <p>رنگ، اندازه، پوشش نوشته، فونت و هایلایت رو عوض کن. زیرنویس رو روی تصویر بکش تا جاش عوض بشه. کلمه‌ها رو روی خط زمان بکش تا با حرف زدن جور بشن. «کلمه‌به‌کلمه» هر کلمه رو جدا نشون می‌ده. روی خط ویدیو بزن تا برش، صدا، سرعت یا حذف همون تکه باز بشه. روی کلمه بزن تا متنش را عوض کنی، یکی اضافه کنی یا پاکش کنی. «ثبت نهایی» فایل را می‌سازد، پوشه‌اش را باز می‌کند و همان پایین نشان می‌دهد.</p>
+    </section>
   </div>
 
   <a href="/" class="back-btn back-btn-end">بازگشت</a>
 </div>
-<footer class="site-footer">
-  <p class="brand-logo" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</p>
-  <p class="footer-credit">طراحی شده با هوش مصنوعی توسط <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>
-  <div class="footer-tools">
-    <button id="theme-toggle" type="button" class="icon-btn theme-toggle" title="حالت روشن یا تیره" aria-label="حالت روشن یا تیره">
-      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 7 7 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-    </button>
-    <a href="/help.html" class="icon-btn help-link" title="راهنما" aria-label="راهنما">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.7 2.2c-.9.5-1.3 1-1.3 2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></svg>
-    </a>
-  </div>
-</footer>
-<script>
-  (function () {
-    const btn = document.getElementById('theme-toggle');
-    if (!btn) return;
-    function sync() {
-      const light = document.documentElement.getAttribute('data-theme') === 'light';
-      btn.classList.toggle('on', light);
-      btn.setAttribute('aria-label', light ? 'حالت تیره' : 'حالت روشن');
-      btn.title = light ? 'حالت تیره' : 'حالت روشن';
-    }
-    sync();
-    btn.addEventListener('click', () => {
-      const light = document.documentElement.getAttribute('data-theme') === 'light';
-      if (light) document.documentElement.removeAttribute('data-theme');
-      else document.documentElement.setAttribute('data-theme', 'light');
-      try {
-        localStorage.setItem('reel.theme', light ? 'dark' : 'light');
-      } catch (e) {}
-      sync();
-    });
-  })();
-</script>
+<script src="/shell.js"></script>
 </body>
 </html>

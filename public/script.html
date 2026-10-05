@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>سناریوی دستی</title>
+<link rel="stylesheet" href="/style.css" />
+<script>
+  try {
+    if (localStorage.getItem('reel.theme') === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+    var ui = localStorage.getItem('reel.uiScale');
+    if (ui === 'lg' || ui === 'xl') document.documentElement.setAttribute('data-ui', ui);
+  } catch (e) {}
+</script>
+</head>
+<body class="help-body">
+<header class="site-header">
+  <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
+  <nav class="site-nav" aria-label="منو">
+    <a href="/" data-nav="home">داشبورد</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <button type="button" id="maker-open">سازنده</button>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/help.html" data-nav="help">راهنما</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/?settings=1" data-nav="settings" id="nav-settings">تنظیمات</a>
+  </nav>
+</header>
+<div class="sub-page script-page">
+  <a href="/" class="back-btn">بازگشت</a>
+  <div class="script-shell">
+    <div class="script-copy">
+      <h1 id="script-page-title">سناریوی دستی</h1>
+      <p class="page-lead">عنوان و متن رو بنویس. هر پاراگراف با یه خط خالی جدا می‌شه.</p>
+      <ul class="script-tips">
+        <li>هر پاراگراف می‌شه یک تکه ضبط.</li>
+        <li>برای رنگ، اول تکه رو انتخاب کن، بعد رنگ و تاکید.</li>
+        <li>بعد ذخیره، مستقیم برمی‌گردی به ضبط.</li>
+      </ul>
+    </div>
+    <form id="manual-form" class="manual-form script-form">
+      <input id="manual-path" type="hidden" value="" />
+      <label>عنوان
+        <input id="manual-title" type="text" maxlength="80" autocomplete="off" />
+      </label>
+      <label>متن
+        <div
+          id="manual-text"
+          class="manual-text-editor"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          data-placeholder="هر پاراگراف رو با یه خط خالی جدا کن. برای تاکید از دکمه‌ی پایین استفاده کن"
+        ></div>
+      </label>
+      <div class="manual-tools">
+        <div class="manual-tools-start">
+          <div class="em-colors" id="em-colors" role="group" aria-label="رنگ تاکید">
+            <button type="button" class="em-color on" data-color="1" title="رنگ ۱" style="--em:#ff3d1f"></button>
+            <button type="button" class="em-color" data-color="2" title="رنگ ۲" style="--em:#ff8a2b"></button>
+            <button type="button" class="em-color" data-color="3" title="رنگ ۳" style="--em:#f5c542"></button>
+            <button type="button" class="em-color" data-color="4" title="رنگ ۴" style="--em:#3ecf8e"></button>
+            <button type="button" class="em-color" data-color="5" title="رنگ ۵" style="--em:#3ba0ff"></button>
+            <button type="button" class="em-color" data-color="6" title="رنگ ۶" style="--em:#e85d8a"></button>
+          </div>
+          <button id="em-color-toggle" type="button" class="manual-emphasize on">انتخاب رنگ</button>
+        </div>
+        <button id="manual-emphasize" type="button" class="manual-emphasize">تاکید روی انتخاب</button>
+      </div>
+      <p id="manual-error" class="manual-error"></p>
+      <div class="manual-actions">
+        <button id="manual-save" type="submit">ذخیره و باز کن</button>
+        <a href="/" class="manual-cancel-link">بستن</a>
+      </div>
+    </form>
+  </div>
+  <a href="/" class="back-btn back-btn-end">بازگشت</a>
+</div>
+<script src="/shell.js"></script>
+<script src="/script.js"></script>
+</body>
+</html>

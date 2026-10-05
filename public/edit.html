@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ویرایش زیرنویس</title>
+<link rel="stylesheet" href="/style.css" />
+<script>
+  try {
+    if (localStorage.getItem('reel.theme') === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+    var ui = localStorage.getItem('reel.uiScale');
+    if (ui === 'lg' || ui === 'xl') document.documentElement.setAttribute('data-ui', ui);
+  } catch (e) {}
+</script>
+</head>
+<body class="help-body">
+<header class="site-header">
+  <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
+  <nav class="site-nav" aria-label="منو">
+    <a href="/" data-nav="home">داشبورد</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <button type="button" id="maker-open">سازنده</button>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/help.html" data-nav="help">راهنما</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/?settings=1" data-nav="settings" id="nav-settings">تنظیمات</a>
+  </nav>
+</header>
+<div class="sub-page">
+  <a href="/archive.html" class="back-btn">بازگشت</a>
+  <h1 id="edit-title">زیرنویس</h1>
+  <p id="edit-status" class="page-lead"></p>
+
+  <div class="edit-grid">
+    <section class="edit-stage-wrap">
+      <div class="edit-stage">
+        <div class="edit-frame" id="edit-frame">
+          <video id="player" playsinline></video>
+          <div id="caption" class="caption font-vazir" role="button" aria-label="جای زیرنویس"></div>
+        </div>
+      </div>
+      <div class="edit-transport">
+        <button id="play-btn" type="button" class="btn btn-accent">پخش</button>
+        <span id="time-readout" class="time-readout">۰:۰۰ / ۰:۰۰</span>
+      </div>
+    </section>
+
+    <section class="edit-options">
+      <h2>تنظیم زیرنویس</h2>
+      <label>رنگ نوشته
+        <input id="cap-color" type="color" value="#ffffff" />
+      </label>
+      <label>پوشش نوشته
+        <input id="cap-text-opacity" type="range" min="0" max="100" step="1" value="100" />
+        <span id="cap-text-opacity-out" class="opt-readout">۱۰۰</span>
+      </label>
+      <label>اندازه
+        <input id="cap-size" type="range" min="20" max="120" step="1" value="48" />
+        <span id="cap-size-out" class="opt-readout">۴۸</span>
+      </label>
+      <label>فاصله کلمات
+        <input id="cap-word-space" type="range" min="0" max="40" step="1" value="0" />
+        <span id="cap-word-space-out" class="opt-readout">۰</span>
+      </label>
+      <label>فاصله حروف
+        <input id="cap-letter-space" type="range" min="0" max="20" step="1" value="0" />
+        <span id="cap-letter-space-out" class="opt-readout">۰</span>
+      </label>
+      <label>فاصله سطرها
+        <input id="cap-line-height" type="range" min="100" max="220" step="5" value="130" />
+        <span id="cap-line-height-out" class="opt-readout">۱۳۰</span>
+      </label>
+      <label>فونت
+        <select id="cap-font">
+          <option value="vazir">وزیر متن</option>
+          <option value="yekan">ایران یکان</option>
+          <option value="titr">تیتر</option>
+          <option value="lalezar">لاله زار</option>
+          <option value="nastaliq">نستعلیق</option>
+          <option value="ordibehesht">اردیبهشت</option>
+          <option value="dastnevis">دستنویس</option>
+          <option value="iransans">ایران سنس</option>
+          <option value="peyda">پیدا</option>
+          <option value="ravi">راوی</option>
+        </select>
+      </label>
+      <div class="highlight-block">
+        <div class="highlight-row">
+          <label class="check-row">
+            <input id="cap-highlight" type="checkbox" checked />
+            هایلایت
+          </label>
+          <div id="highlight-fields" class="highlight-fields">
+            <label class="hl-color">رنگ هایلایت
+              <input id="cap-highlight-color" type="color" value="#f5c542" />
+            </label>
+          </div>
+        </div>
+        <label id="highlight-opacity-wrap">پوشش هایلایت
+          <input id="cap-opacity" type="range" min="0" max="100" step="1" value="50" />
+          <span id="cap-opacity-out" class="opt-readout">۵۰</span>
+        </label>
+      </div>
+      <label class="check-row">
+        <input id="cap-word" type="checkbox" />
+        کلمه‌به‌کلمه
+      </label>
+      <div class="edit-actions">
+        <button id="rebuild-btn" type="button" class="btn">زمان‌بندی دوباره</button>
+        <button id="render-btn" type="button" class="btn btn-accent">ثبت نهایی</button>
+        <a id="render-link" class="btn" hidden>دیدن فایل</a>
+        <button id="open-export" type="button" class="btn" hidden>نمایش پوشه</button>
+      </div>
+      <video id="export-player" class="export-player" controls playsinline hidden></video>
+    </section>
+  </div>
+
+  <section class="tl-panel">
+    <div class="tl-tools">
+      <p class="opt-hint" id="tl-hint"></p>
+      <label class="zoom-label">درشت‌نمایی
+        <input id="tl-zoom" type="range" min="1" max="8" step="0.1" value="1" />
+      </label>
+    </div>
+    <div id="tl-editbar" class="tl-editbar">
+      <p id="tl-edit-label" class="opt-hint">روی خط ویدیو یا یه کلمه بزن.</p>
+      <div id="tl-clip-tools" class="tl-toolset" hidden>
+        <button id="tl-split" type="button" class="btn">برش</button>
+        <button id="tl-delete-clip" type="button" class="btn btn-danger">حذف</button>
+        <label class="tl-inline">صدا
+          <input id="tl-volume" type="range" min="0" max="200" step="1" value="100" />
+          <span id="tl-volume-out" class="opt-readout">۱۰۰</span>
+        </label>
+        <button id="tl-mute" type="button" class="btn btn-icon" title="بی‌صدا" aria-label="بی‌صدا">
+          <svg class="mute-icon mute-icon-on" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4zm11.5 3a3.5 3.5 0 0 0-1.9-3.1v6.2A3.5 3.5 0 0 0 15.5 12zM14 4.1v2.1a6 6 0 0 1 0 11.6v2.1a8 8 0 0 0 0-15.8z"/></svg>
+          <svg class="mute-icon mute-icon-off" viewBox="0 0 24 24" aria-hidden="true" hidden><path fill="currentColor" d="M16.5 12a3.5 3.5 0 0 0-1.9-3.1v2.2l1.8 1.8c.07-.3.1-.6.1-.9zm2.5.1c0 .9-.2 1.7-.5 2.5l1.5 1.5A7.9 7.9 0 0 0 21 12.1c0-3.3-1.8-6.1-4.5-7.5v2.1A5.9 5.9 0 0 1 19 12.1zM4.3 3 3 4.3 7.7 9H4v6h4l5 4v-6.7l4.7 4.7.8-.5-13.2-13.5zM14 5l-1.9 1.5L14 8.4V5z"/></svg>
+        </button>
+        <label class="tl-inline">سرعت
+          <input id="tl-speed" type="range" min="50" max="200" step="1" value="100" />
+          <span id="tl-speed-out" class="opt-readout">۱</span>
+        </label>
+        <label class="tl-inline">سرعت ویژه
+          <select id="tl-speed-special">
+            <option value="">عادی</option>
+            <option value="3">۳×</option>
+            <option value="4">۴×</option>
+            <option value="5">۵×</option>
+            <option value="10">۱۰×</option>
+          </select>
+        </label>
+      </div>
+      <div id="tl-word-tools" class="tl-toolset" hidden>
+        <button id="tl-edit-word" type="button" class="btn btn-edit">ویرایش</button>
+        <button id="tl-add-word" type="button" class="btn btn-add">افزودن</button>
+        <button id="tl-delete-word" type="button" class="btn btn-danger">حذف</button>
+      </div>
+    </div>
+    <div class="tl-wrap">
+      <div class="tl-labels" id="tl-labels">
+        <span>کلمه‌ها</span>
+        <span>ویدیو</span>
+      </div>
+      <div class="tl-scroll" id="tl-scroll">
+        <div class="tl-inner" id="tl-inner" dir="ltr">
+          <div class="tl-lane" id="word-lane"></div>
+          <div class="tl-lanes" id="video-lanes">
+            <div class="tl-lane tl-video" id="video-lane" data-lane="0"></div>
+          </div>
+          <div class="tl-playhead" id="playhead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script src="/shell.js"></script>
+<script src="/edit.js"></script>
+</body>
+</html>

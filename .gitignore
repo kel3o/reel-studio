@@ -1,4 +1,5 @@
 config.json
+vendor/
 takes/
 out/
 assets/

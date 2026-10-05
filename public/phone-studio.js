@@ -4,6 +4,10 @@
   emptyCanvas.height = 0;
 
   const phones = new Map();
+  // Once a phone has been seen this session, keep its id/label in the
+  // dashboard picker even if the socket blinks. Live frames still come only
+  // from the phones Map.
+  const remembered = new Map();
   const api = {
     id: 'phone',
     canvas: emptyCanvas,
@@ -12,8 +16,15 @@
     lagMs: 0,
     cameras: function () {
       const list = [];
+      const seen = {};
       phones.forEach(function (phone) {
+        seen[phone.id] = true;
+        remembered.set(phone.id, phone.label || 'دوربین موبایل');
         list.push({ id: phone.id, label: phone.label, canvas: phone.canvas, hasFrame: phone.hasFrame });
+      });
+      remembered.forEach(function (label, id) {
+        if (seen[id]) return;
+        list.push({ id: id, label: label, canvas: emptyCanvas, hasFrame: false });
       });
       return list;
     },
@@ -47,6 +58,8 @@
   let statusHandler = null;
   let lastAsk = 0;
   let listSig = '';
+  let publishTimer = 0;
+  let lastPublishedConnected = null;
 
   function syncHead() {
     const first = phones.values().next().value;
@@ -55,23 +68,39 @@
     api.connected = phones.size > 0;
   }
 
-  function publish() {
+  function publishNow() {
     syncHead();
-    const signature = api
-      .cameras()
-      .map(function (phone) {
-        return phone.id + ':' + phone.label;
+    // Picker list is remembered cameras. Live link state is separate so a
+    // brief drop does not remove rows from برش دوربین.
+    const signature = Array.from(remembered.entries())
+      .map(function (row) {
+        return row[0] + ':' + row[1];
       })
-      .concat(
-        api.mics().map(function (mic) {
-          return 'm:' + mic.id;
-        })
-      )
+      .sort()
       .join('|');
     const changed = signature !== listSig;
+    const connectedChanged = lastPublishedConnected !== api.connected;
     listSig = signature;
+    lastPublishedConnected = api.connected;
     renderHint();
-    if (changed && statusHandler) statusHandler(api.connected);
+    if ((changed || connectedChanged) && statusHandler) statusHandler(api.connected);
+  }
+
+  function publish() {
+    // Debounce so a reconnect burst does not thrash the camera picker.
+    if (publishTimer) clearTimeout(publishTimer);
+    publishTimer = setTimeout(function () {
+      publishTimer = 0;
+      publishNow();
+    }, 320);
+  }
+
+  function publishImmediate() {
+    if (publishTimer) {
+      clearTimeout(publishTimer);
+      publishTimer = 0;
+    }
+    publishNow();
   }
 
   function stopPhoneAudio(phone) {
@@ -134,6 +163,10 @@
   function dropPhone(id) {
     const phone = phones.get(id);
     if (!phone) return;
+    if (phone.holdTimer) {
+      clearTimeout(phone.holdTimer);
+      phone.holdTimer = null;
+    }
     if (phone.decoder && phone.decoder.state !== 'closed') {
       try {
         phone.decoder.close();
@@ -168,23 +201,42 @@
         audioTrack: null,
         audioNext: 0,
         audioListed: false,
+        holdTimer: null,
       };
       phones.set(id, phone);
     } else if (label) {
       phone.label = label;
     }
+    remembered.set(phone.id, phone.label || 'دوربین موبایل');
+    if (phone.holdTimer) {
+      clearTimeout(phone.holdTimer);
+      phone.holdTimer = null;
+    }
     return phone;
   }
 
+  let lastPhoneIds = {};
+
   function setPhoneList(list) {
-    const ids = {};
+    const incoming = {};
     (list || []).forEach(function (item) {
       if (!item || !item.id) return;
-      ids[item.id] = true;
+      incoming[item.id] = true;
       ensurePhone(item.id, item.label);
     });
+    lastPhoneIds = incoming;
     Array.from(phones.keys()).forEach(function (id) {
-      if (!ids[id]) dropPhone(id);
+      if (incoming[id]) return;
+      const phone = phones.get(id);
+      if (!phone || phone.holdTimer) return;
+      phone.holdTimer = setTimeout(function () {
+        phone.holdTimer = null;
+        if (lastPhoneIds[id]) return;
+        // Drop live tracks only. Keep remembered id/label so the cut list
+        // row does not vanish while the phone reconnects.
+        dropPhone(id);
+        publishImmediate();
+      }, 12000);
     });
     publish();
   }
@@ -379,9 +431,21 @@
       onBinary(ev.data);
     };
     ws.onclose = function () {
-      Array.from(phones.keys()).forEach(dropPhone);
+      // Keep local phone canvases across a brief studio-socket blip. Wiping
+      // here made "دوربین موبایل ۱" vanish from the cut-camera list every
+      // reconnect. Soft-expire only after phone-status stays empty.
+      Array.from(phones.keys()).forEach(function (id) {
+        const phone = phones.get(id);
+        if (!phone || phone.holdTimer) return;
+        phone.holdTimer = setTimeout(function () {
+          phone.holdTimer = null;
+          if (lastPhoneIds[id]) return;
+          dropPhone(id);
+          publishImmediate();
+        }, 20000);
+      });
       publish();
-      setTimeout(connect, 1000);
+      setTimeout(connect, 400);
     };
   }
 

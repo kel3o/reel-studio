@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>بایگانی ریل استودیو</title>
+<link rel="stylesheet" href="/style.css" />
+<script>
+  try {
+    if (localStorage.getItem('reel.theme') === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+    var ui = localStorage.getItem('reel.uiScale');
+    if (ui === 'lg' || ui === 'xl') document.documentElement.setAttribute('data-ui', ui);
+  } catch (e) {}
+</script>
+</head>
+<body class="help-body">
+<header class="site-header">
+  <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
+  <nav class="site-nav" aria-label="منو">
+    <a href="/" data-nav="home">داشبورد</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <button type="button" id="maker-open">سازنده</button>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/help.html" data-nav="help">راهنما</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/?settings=1" data-nav="settings" id="nav-settings">تنظیمات</a>
+  </nav>
+</header>
+<div class="sub-page">
+  <a href="/" class="back-btn">بازگشت</a>
+  <h1>بایگانی</h1>
+  <p class="page-lead">ضبط‌های قبول‌شده اینجاست. یکی رو برای زیرنویس باز کن، یا ویدیو رو پاک کن. خود سناریو می‌مونه.</p>
+  <p id="archive-status" class="page-lead"></p>
+  <div id="archive-list" class="archive-list"></div>
+</div>
+<script src="/shell.js"></script>
+<script src="/archive.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 (function () {
   const state = {
     slug: null,
+    title: '',
     paragraphs: [],
     current: 0,
     phase: 'idle', // idle | ready | countdown | recording | review | done
@@ -20,6 +21,8 @@
   const openFolderBtn = document.getElementById('tp-open-folder');
   const speedReadout = document.getElementById('tp-speed');
   const sizeReadout = document.getElementById('tp-size');
+  const leadInput = document.getElementById('tp-lead');
+  const leadReadout = document.getElementById('tp-lead-out');
   const clockEl = document.getElementById('tp-clock');
   const stage = document.getElementById('teleprompter');
   const textEl = document.getElementById('tp-text');
@@ -30,10 +33,14 @@
   const progressStrip = document.getElementById('progress-strip');
   const veil = document.getElementById('tp-veil');
   const veilTitle = document.getElementById('tp-veil-title');
+  const veilCloseBtn = document.getElementById('tp-veil-close');
   const veilGoBtn = document.getElementById('tp-go');
   const recordBtn = document.getElementById('tp-record');
   const retakeBtn = document.getElementById('tp-retake');
   const acceptBtn = document.getElementById('tp-accept');
+  const captionLink = document.getElementById('tp-captions');
+  let captionBuildKey = '';
+  let accepting = false;
 
   const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
   function faNum(n) {
@@ -45,26 +52,34 @@
   }
 
   // The pause mark (⏸) stays in paragraph.text for the performer, but the
-  // emphasis[] and pauses[] indices only count spoken words. Rebuilding the
-  // rich markup here (bold words, a "مکث" pill) keeps that contract intact
-  // instead of pushing it back into the parser.
+  // emphasis[] and pauses[] indices only count spoken words. Soft line breaks
+  // from the script stay as <br>. Color tags like [2] never reach the screen.
   function paragraphHtml(p) {
-    const tokens = String((p && p.text) || '').split(/\s+/).filter(Boolean);
+    const source = String((p && p.text) || '').replace(/\r\n/g, '\n');
     const emphasis = p && Array.isArray(p.emphasis) ? p.emphasis : [];
     const colors = (p && p.emphasisColors) || {};
     let wordIndex = -1;
-    return tokens
-      .map((token) => {
-        if (token === '⏸') return '<span class="pz">مکث</span>';
+    const parts = [];
+    source.split('\n').forEach((line, lineIndex) => {
+      if (lineIndex) parts.push('<br>');
+      const tokens = line.split(/\s+/).filter(Boolean);
+      tokens.forEach((token, tokenIndex) => {
+        if (tokenIndex) parts.push(' ');
+        if (token === '⏸') {
+          parts.push('<span class="pz">مکث</span>');
+          return;
+        }
         wordIndex += 1;
         const text = escapeHtml(token);
         if (emphasis.includes(wordIndex)) {
           const color = colors[wordIndex] || 1;
-          return `<b class="tp-w tp-em tp-em-${color}">${text}</b>`;
+          parts.push('<b class="tp-w tp-em tp-em-' + color + '">' + text + '</b>');
+          return;
         }
-        return `<span class="tp-w">${text}</span>`;
-      })
-      .join(' ');
+        parts.push('<span class="tp-w">' + text + '</span>');
+      });
+    });
+    return parts.join('');
   }
 
   function currentParagraphHtml() {
@@ -117,6 +132,7 @@
 
   let speed = 3;
   let fontSize = 46;
+  let lineHeight = 1.75;
   // The known bug: adding a sub pixel delta straight to scrollTop truncates
   // to zero every frame at slow speeds, because scrollTop always reads back
   // an integer. Accumulate the real position here instead, and only assign.
@@ -129,23 +145,54 @@
     statusEl.textContent = text;
   }
 
+  function setRecordLabel(text) {
+    const label = recordBtn.querySelector('.tp-rec-label');
+    if (label) label.textContent = text;
+    else recordBtn.textContent = text;
+  }
+
   function updateRecordButton() {
     recordBtn.hidden = state.phase === 'review' || state.phase === 'done' || state.phase === 'idle';
     retakeBtn.hidden = state.phase !== 'review';
     acceptBtn.hidden = state.phase !== 'review';
 
     if (state.phase === 'ready') {
-      recordBtn.textContent = 'ضبط';
+      setRecordLabel('ضبط');
       recordBtn.disabled = false;
       recordBtn.classList.remove('on');
     } else if (state.phase === 'recording') {
-      recordBtn.textContent = 'توقف';
+      setRecordLabel('توقف');
       recordBtn.disabled = false;
       recordBtn.classList.add('on');
     } else if (state.phase === 'countdown') {
       recordBtn.disabled = true;
       recordBtn.classList.remove('on');
     }
+    syncCaptionLink();
+  }
+
+  function syncCaptionLink() {
+    if (!captionLink) return;
+    const show = state.phase === 'done' && !!state.slug;
+    captionLink.hidden = !show;
+    if (!show) {
+      captionBuildKey = '';
+      return;
+    }
+    captionLink.href = '/edit.html?slug=' + encodeURIComponent(state.slug);
+    if (captionBuildKey === state.slug) return;
+    captionBuildKey = state.slug;
+    const durations = {};
+    state.paragraphs.forEach((paragraph) => {
+      if (paragraph.accepted && Number(paragraph.duration) > 0.05) {
+        durations[paragraph.accepted] = Number(paragraph.duration);
+      }
+    });
+    fetch('/api/captions/build?slug=' + encodeURIComponent(state.slug), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ durations }),
+    }).catch(() => {});
   }
 
   function setSpeed(v) {
@@ -156,7 +203,14 @@
   function setFontSize(v) {
     fontSize = Math.max(24, Math.min(90, v));
     panel.style.setProperty('--tp-size', fontSize + 'px');
-    sizeReadout.textContent = faNum(fontSize);
+    if (sizeReadout) sizeReadout.textContent = faNum(fontSize);
+  }
+
+  function setLineHeight(v) {
+    lineHeight = Math.max(1.2, Math.min(2.8, Number(v) || 1.75));
+    panel.style.setProperty('--tp-lead', String(lineHeight));
+    if (leadInput) leadInput.value = String(Math.round(lineHeight * 100));
+    if (leadReadout) leadReadout.textContent = faNum(lineHeight.toFixed(2)).replace('.', '٫');
   }
 
   function renderTeleprompter() {
@@ -315,13 +369,22 @@
   async function saveSession() {
     const body = {
       script: state.slug,
+      title: state.title || '',
       paragraphs: state.paragraphs.map((p) => ({
         index: p.index,
         text: p.text,
         takes: p.takes,
         accepted: p.accepted,
+        duration: p.duration || null,
       })),
     };
+    try {
+      const devices = window.__reelDevices;
+      if (devices && typeof devices.cameraLabels === 'function') {
+        const labels = devices.cameraLabels();
+        if (Array.isArray(labels) && labels.length > 1) body.cameras = labels;
+      }
+    } catch (err) {}
     try {
       await fetch(`/api/session?slug=${encodeURIComponent(state.slug)}`, {
         method: 'POST',
@@ -333,13 +396,37 @@
     }
   }
 
-  function acceptTake() {
+  function reviewDuration() {
+    const known = reviewVideo.duration;
+    if (Number.isFinite(known) && known > 0) return Promise.resolve(known);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        reviewVideo.removeEventListener('loadedmetadata', finish);
+        const value = reviewVideo.duration;
+        resolve(Number.isFinite(value) && value > 0 ? value : null);
+      };
+      reviewVideo.addEventListener('loadedmetadata', finish);
+      setTimeout(finish, 1200);
+    });
+  }
+
+  async function acceptTake() {
+    if (accepting || state.phase !== 'review') return;
+    accepting = true;
     const p = state.paragraphs[state.current];
     p.accepted = p.takes[p.takes.length - 1];
+    try {
+      p.duration = await reviewDuration();
+    } catch (err) {
+      p.duration = null;
+    }
     reviewVideo.hidden = true;
     liveCam.hidden = false;
     reviewVideo.pause();
-    saveSession();
+    await saveSession();
 
     if (state.current < state.paragraphs.length - 1) {
       state.current += 1;
@@ -355,6 +442,7 @@
     renderTeleprompter();
     renderProgress();
     if (state.phase === 'done') pushTeleprompter({ visible: false, scrolling: false });
+    accepting = false;
   }
 
   function retake() {
@@ -379,8 +467,46 @@
     if (state.phase === 'ready') armRecording();
   }
 
+  function exitCapture() {
+    if (state.phase === 'idle') return;
+    if (state.phase === 'recording' || state.phase === 'countdown') {
+      try {
+        if (state.mediaRecorder && state.mediaRecorder.state === 'recording') state.mediaRecorder.stop();
+      } catch (err) {}
+      state.mediaRecorder = null;
+      state.chunks = [];
+    }
+    if (reviewVideo) {
+      try {
+        reviewVideo.pause();
+        reviewVideo.removeAttribute('src');
+        reviewVideo.load();
+      } catch (err) {}
+      reviewVideo.hidden = true;
+    }
+    if (liveCam) liveCam.hidden = false;
+    state.phase = 'idle';
+    state.slug = null;
+    state.title = '';
+    state.paragraphs = [];
+    state.current = 0;
+    panel.hidden = true;
+    panel.classList.remove('fullscreen', 'mirror');
+    document.body.classList.remove('tp-open');
+    veil.classList.remove('tp-veil-hidden');
+    updateRecordButton();
+    pushTeleprompter({ visible: false, scrolling: false });
+    setStatus('آماده');
+  }
+
   function handleKey(e) {
-    if (state.phase === 'idle' || state.phase === 'done') return;
+    if (panel.hidden || state.phase === 'idle') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitCapture();
+      return;
+    }
+    if (state.phase === 'done' && veil && !veil.classList.contains('tp-veil-hidden')) return;
     if (e.code === 'Space') {
       e.preventDefault();
       toggleRecording();
@@ -404,28 +530,35 @@
   }
   document.addEventListener('keydown', handleKey);
 
-  closeBtn.addEventListener('click', () => {
-    const isFull = panel.classList.toggle('fullscreen');
-    closeBtn.textContent = isFull ? 'بستن' : 'تمام‌صفحه';
-    if (!isFull) pushTeleprompter({ visible: false, scrolling: false });
-    else pushTeleprompter();
-  });
-  slowerBtn.addEventListener('click', () => setSpeed(speed - 1));
-  fasterBtn.addEventListener('click', () => setSpeed(speed + 1));
-  smallerBtn.addEventListener('click', () => setFontSize(fontSize - 4));
-  biggerBtn.addEventListener('click', () => setFontSize(fontSize + 4));
-  restartBtn.addEventListener('click', () => {
-    scrollPos = 0;
-    stage.scrollTop = 0;
-  });
-  mirrorBtn.addEventListener('click', () => {
-    const on = panel.classList.toggle('mirror');
-    mirrorBtn.classList.toggle('on', on);
-  });
-  openFolderBtn.addEventListener('click', () => {
-    if (!state.slug) return;
-    fetch(`/api/open-folder?slug=${encodeURIComponent(state.slug)}`, { method: 'POST' }).catch(() => {});
-  });
+  closeBtn.addEventListener('click', exitCapture);
+  if (veilCloseBtn) veilCloseBtn.addEventListener('click', exitCapture);
+  if (slowerBtn) slowerBtn.addEventListener('click', () => setSpeed(speed - 1));
+  if (fasterBtn) fasterBtn.addEventListener('click', () => setSpeed(speed + 1));
+  if (smallerBtn) smallerBtn.addEventListener('click', () => setFontSize(fontSize - 4));
+  if (biggerBtn) biggerBtn.addEventListener('click', () => setFontSize(fontSize + 4));
+  if (restartBtn) {
+    restartBtn.addEventListener('click', () => {
+      scrollPos = 0;
+      stage.scrollTop = 0;
+    });
+  }
+  if (mirrorBtn) {
+    mirrorBtn.addEventListener('click', () => {
+      const on = panel.classList.toggle('mirror');
+      mirrorBtn.classList.toggle('on', on);
+    });
+  }
+  if (openFolderBtn) {
+    openFolderBtn.addEventListener('click', () => {
+      if (!state.slug) return;
+      fetch(`/api/open-folder?slug=${encodeURIComponent(state.slug)}`, { method: 'POST' }).catch(() => {});
+    });
+  }
+  if (leadInput) {
+    leadInput.addEventListener('input', () => {
+      setLineHeight(Number(leadInput.value) / 100);
+    });
+  }
   function openFromVeil() {
     if (!state.paragraphs.length) {
       dismissVeil();
@@ -493,10 +626,12 @@
     const list = Array.isArray(paragraphs) ? paragraphs : [];
     if (!list.length) {
       panel.hidden = true;
+      document.body.classList.remove('tp-open');
       return;
     }
     const existing = await loadExistingSession(slug);
     state.slug = slug;
+    state.title = title || '';
     state.paragraphs = list.map((p, i) => {
       const prior = existing && existing.paragraphs && existing.paragraphs[i];
       return {
@@ -506,6 +641,7 @@
         emphasisColors: p.emphasisColors || {},
         takes: prior ? prior.takes || [] : [],
         accepted: prior ? prior.accepted || null : null,
+        duration: prior && Number(prior.duration) > 0 ? Number(prior.duration) : null,
       };
     });
     const firstUnaccepted = state.paragraphs.findIndex((p) => !p.accepted);
@@ -514,7 +650,7 @@
 
     panel.hidden = false;
     panel.classList.add('fullscreen');
-    closeBtn.textContent = 'بستن';
+    document.body.classList.add('tp-open');
     if (window.__reel && window.__reel.stream) {
       liveCam.srcObject = window.__reel.stream;
     }
@@ -525,6 +661,7 @@
     setStatus(state.phase === 'done' ? 'همه‌ی پاراگراف‌ها ضبط شد' : 'آماده');
     setSpeed(speed);
     setFontSize(fontSize);
+    setLineHeight(lineHeight);
     updateRecordButton();
     renderTeleprompter();
     renderProgress();

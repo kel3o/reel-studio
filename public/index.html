@@ -10,101 +10,89 @@
     if (localStorage.getItem('reel.theme') === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
     }
+    var ui = localStorage.getItem('reel.uiScale');
+    if (ui === 'lg' || ui === 'xl') document.documentElement.setAttribute('data-ui', ui);
   } catch (e) {}
 </script>
 </head>
 <body>
+<header class="site-header">
+  <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
+  <nav class="site-nav" aria-label="منو">
+    <a href="/" data-nav="home">داشبورد</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <button type="button" id="maker-open">سازنده</button>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/help.html" data-nav="help">راهنما</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/?settings=1" data-nav="settings" id="nav-settings">تنظیمات</a>
+  </nav>
+</header>
 <div class="app">
   <aside class="scripts-panel">
     <div class="scripts-panel-head">
       <h1>سناریوها</h1>
     </div>
-    <button id="manual-open" type="button" class="manual-open">سناریوی دستی</button>
-    <form id="manual-form" class="manual-form" hidden>
-      <input id="manual-path" type="hidden" value="" />
-      <label>عنوان
-        <input id="manual-title" type="text" maxlength="80" autocomplete="off" />
-      </label>
-      <label>متن
-        <div
-          id="manual-text"
-          class="manual-text-editor"
-          contenteditable="true"
-          role="textbox"
-          aria-multiline="true"
-          data-placeholder="هر پاراگراف رو با یه خط خالی جدا کن. برای تاکید از دکمه‌ی پایین استفاده کن"
-        ></div>
-      </label>
-      <div class="manual-tools">
-        <button id="em-color-toggle" type="button" class="manual-emphasize">انتخاب رنگ</button>
-        <button id="manual-emphasize" type="button" class="manual-emphasize">تاکید روی انتخاب</button>
-        <div class="em-colors" id="em-colors" role="group" aria-label="رنگ تاکید" hidden>
-          <button type="button" class="em-color on" data-color="1" title="رنگ ۱" style="--em:#ff3d1f"></button>
-          <button type="button" class="em-color" data-color="2" title="رنگ ۲" style="--em:#ff8a2b"></button>
-          <button type="button" class="em-color" data-color="3" title="رنگ ۳" style="--em:#f5c542"></button>
-          <button type="button" class="em-color" data-color="4" title="رنگ ۴" style="--em:#3ecf8e"></button>
-          <button type="button" class="em-color" data-color="5" title="رنگ ۵" style="--em:#3ba0ff"></button>
-          <button type="button" class="em-color" data-color="6" title="رنگ ۶" style="--em:#e85d8a"></button>
-        </div>
-      </div>
-      <p id="manual-error" class="manual-error"></p>
-      <div class="manual-actions">
-        <button id="manual-save" type="submit">ذخیره و باز کن</button>
-        <button id="manual-cancel" type="button">بستن</button>
-      </div>
-    </form>
+    <a href="/script.html" class="manual-open">سناریوی دستی</a>
     <ul id="script-list" class="script-list"></ul>
   </aside>
   <main class="paragraphs-panel">
-    <section class="device-setup">
-      <div class="device-row">
-        <label>دوربین
-          <select id="camera-select"></select>
-        </label>
-        <label>میکروفون
-          <select id="mic-select"></select>
-        </label>
-        <div class="orientation-group">
-          <span class="orientation-label">نسبت تصویر</span>
-          <button id="orientation-landscape" type="button" class="orientation-btn">افقی</button>
-          <button id="orientation-square" type="button" class="orientation-btn">۱:۱</button>
-          <button id="orientation-vertical" type="button" class="orientation-btn">۹:۱۶</button>
-          <button id="split-cameras" type="button" class="orientation-btn">چند دوربین</button>
-          <button id="rotate-cameras" type="button" class="orientation-btn">برش دوربین</button>
+    <section class="device-setup dash-setup">
+      <div class="dash-layout">
+        <div class="dash-stage-col">
+          <p class="set-kicker">پیش‌نمایش</p>
+          <div id="stage-home" class="dash-stage">
+            <div class="stage-frame">
+              <video id="preview" class="preview" autoplay muted playsinline></video>
+              <video id="raw-cam" class="raw-cam" autoplay muted playsinline></video>
+              <canvas id="frame-canvas" class="frame-canvas"></canvas>
+            </div>
+          </div>
+          <div class="meter-track">
+            <div id="meter-bar" class="meter-bar"></div>
+          </div>
+          <p id="readiness" class="readiness mic-status">وضعیت میکروفون</p>
+          <p id="phone-hint" class="phone-hint" hidden></p>
+        </div>
+        <div class="dash-controls">
+          <div class="set-card">
+            <span>نسبت تصویر</span>
+            <div class="orientation-group set-ratios" role="group" aria-label="نسبت تصویر">
+              <button id="dash-orientation-landscape" type="button" class="orientation-btn ratio-btn" data-orientation="landscape">
+                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 24 16"><rect x="1.5" y="3.5" width="21" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                <span>افقی</span>
+              </button>
+              <button id="dash-orientation-square" type="button" class="orientation-btn ratio-btn" data-orientation="square">
+                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><rect x="2" y="2" width="14" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                <span>مربع</span>
+              </button>
+              <button id="dash-orientation-vertical" type="button" class="orientation-btn ratio-btn" data-orientation="vertical">
+                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 16 24"><rect x="3.5" y="1.5" width="9" height="21" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                <span>ریل</span>
+              </button>
+            </div>
+            <p class="opt-hint">سریع عوض کن. جزئیات دوربین و میکروفون توی تنظیماته.</p>
+          </div>
+          <div class="set-card">
+            <span>دوربین‌ها</span>
+            <div class="cam-actions dash-cam-actions">
+              <button id="split-cameras" type="button" class="orientation-btn">چند دوربین</button>
+              <button id="rotate-cameras" type="button" class="orientation-btn">برش دوربین</button>
+            </div>
+            <label id="cut-seconds-wrap" class="cut-seconds-wrap" hidden>هر چند ثانیه برش
+              <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
+            </label>
+            <div id="split-picks" class="split-picks" hidden></div>
+          </div>
         </div>
       </div>
-      <div id="split-picks" class="split-picks" hidden></div>
-      <label id="cut-seconds-wrap" class="cut-seconds-wrap" hidden>هر چند ثانیه برش
-        <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
-      </label>
-      <p id="phone-hint" class="phone-hint">آدرس گوشی داره آماده می‌شه.</p>
-      <video id="preview" class="preview" autoplay muted playsinline></video>
-      <video id="raw-cam" class="raw-cam" autoplay muted playsinline></video>
-      <canvas id="frame-canvas" class="frame-canvas"></canvas>
-      <div class="meter-track">
-        <div id="meter-bar" class="meter-bar"></div>
-      </div>
-      <p id="readiness" class="readiness">در حال گرفتن دسترسی دوربین و میکروفون</p>
     </section>
-    <h2 id="script-title">یه سناریو رو انتخاب کن</h2>
+    <h2 id="script-title" class="script-title" hidden></h2>
 
     <section id="capture-panel" class="capture-panel" hidden>
-      <header class="tp-header">
-        <button id="tp-close" type="button" title="بستن حالت تمام‌صفحه">بستن</button>
-        <span class="tp-sep"></span>
-        <button id="tp-slower" type="button">کندتر</button>
-        <span class="tp-readout" id="tp-speed">۳</span>
-        <button id="tp-faster" type="button">تندتر</button>
-        <button id="tp-smaller" type="button">کوچک‌تر</button>
-        <span class="tp-readout" id="tp-size">۴۶</span>
-        <button id="tp-bigger" type="button">بزرگ‌تر</button>
-        <button id="tp-restart" type="button">از اول</button>
-        <button id="tp-mirror" type="button">آینه</button>
-        <button id="tp-open-folder" type="button" title="باز کردن پوشه‌ی این سناریو">پوشه</button>
-        <span class="tp-spacer"></span>
-        <span id="capture-status" class="tp-status">آماده</span>
-        <span class="tp-clock" id="tp-clock">۰:۰۰</span>
-      </header>
+      <button id="tp-close" type="button" class="tp-close-x" title="بستن" aria-label="بستن">×</button>
 
       <div class="tp-eyeline"></div>
 
@@ -114,21 +102,72 @@
 
       <div class="tp-bar" id="tp-bar"></div>
 
-      <ol id="progress-strip" class="progress-strip"></ol>
-
       <div class="tp-cam-box">
         <video id="tp-live-cam" class="tp-cam-video" autoplay muted playsinline></video>
         <canvas id="tp-phone-view" class="tp-cam-video"></canvas>
         <video id="review-video" class="tp-cam-video" hidden></video>
       </div>
 
-      <div class="tp-record-row">
-        <button id="tp-record" type="button" class="tp-record-btn">ضبط</button>
-        <button id="tp-retake" type="button" class="tp-action-btn" hidden>دوباره‌ضبط</button>
-        <button id="tp-accept" type="button" class="tp-action-btn tp-accept-btn" hidden>قبول</button>
-      </div>
+      <footer class="tp-dock">
+        <div class="tp-dock-tools">
+          <button id="tp-slower" type="button" class="tp-icon-btn" title="کندتر" aria-label="کندتر">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6V4zm1 4h-2v5l4.2 2.5 1-1.7-3.2-1.9V8z"/></svg>
+          </button>
+          <span class="tp-readout" id="tp-speed">۳</span>
+          <button id="tp-faster" type="button" class="tp-icon-btn" title="تندتر" aria-label="تندتر">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6V4zm7 3.5-1.4-1.4L15 8.7V4h-2v7h7v-2h-3.6L19 7.5z"/></svg>
+          </button>
+          <span class="tp-dock-sep" aria-hidden="true"></span>
+          <button id="tp-smaller" type="button" class="tp-icon-btn" title="کوچک‌تر" aria-label="کوچک‌تر">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 4v3h2.5l-3.5 9H5l-.8 2h8l.8-2h-2.2L14.3 7H17V4H9zm10 8h-2v2h-2v2h2v2h2v-2h2v-2h-2v-2z"/></svg>
+          </button>
+          <span class="tp-readout" id="tp-size">۴۶</span>
+          <button id="tp-bigger" type="button" class="tp-icon-btn" title="بزرگ‌تر" aria-label="بزرگ‌تر">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 4v3h2.2l3.5 9H14l.8 2H6.8L6 16h2.2L5.7 7H3V4h2zm11 7v2h-2v2h2v2h2v-2h2v-2h-2v-2h-2z"/></svg>
+          </button>
+          <span class="tp-dock-sep" aria-hidden="true"></span>
+          <label class="tp-lead-wrap" title="ارتفاع سطر">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 5h16v2H4V5zm0 6h16v2H4v-2zm0 6h10v2H4v-2z"/></svg>
+            <input id="tp-lead" type="range" min="120" max="280" step="5" value="175" />
+            <span class="tp-readout" id="tp-lead-out">۱٫۷۵</span>
+          </label>
+          <span class="tp-dock-sep" aria-hidden="true"></span>
+          <button id="tp-restart" type="button" class="tp-icon-btn" title="از اول" aria-label="از اول">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5V2L7 7l5 5V9a5 5 0 1 1-5 5H5a7 7 0 1 0 7-9z"/></svg>
+          </button>
+          <button id="tp-mirror" type="button" class="tp-icon-btn" title="آینه" aria-label="آینه">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4 20h3.2l1.5-3.5h6.6L16.8 20H20L12 2zm0 5.8 2.5 6.2h-5L12 7.8z"/></svg>
+          </button>
+          <button id="tp-open-folder" type="button" class="tp-icon-btn" title="پوشه" aria-label="پوشه">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+          </button>
+          <a id="tp-captions" class="tp-caption-link tp-icon-btn" hidden title="زیرنویس" aria-label="زیرنویس">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm2 4v2h5V9H5zm7 0v2h7V9h-7zm-7 4v2h7v-2H5zm9 0v2h5v-2h-5z"/></svg>
+          </a>
+        </div>
+        <div class="tp-dock-actions">
+          <button id="tp-retake" type="button" class="tp-action-btn" hidden title="دوباره ضبط" aria-label="دوباره ضبط">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5V2L7 7l5 5V9a5 5 0 1 1-4.9 6H5a7 7 0 1 0 7-10z"/></svg>
+            <span>دوباره</span>
+          </button>
+          <button id="tp-record" type="button" class="tp-record-btn" title="ضبط" aria-label="ضبط">
+            <span class="tp-rec-dot" aria-hidden="true"></span>
+            <span class="tp-rec-label">ضبط</span>
+          </button>
+          <button id="tp-accept" type="button" class="tp-action-btn tp-accept-btn" hidden title="قبول" aria-label="قبول">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9.2 16.6 4.8 12l1.4-1.4 3 3 8.6-8.6L19.2 6 9.2 16.6z"/></svg>
+            <span>قبول</span>
+          </button>
+        </div>
+        <div class="tp-dock-meta">
+          <span id="capture-status" class="tp-status">آماده</span>
+          <span class="tp-clock" id="tp-clock">۰:۰۰</span>
+          <ol id="progress-strip" class="progress-strip"></ol>
+        </div>
+      </footer>
 
       <div id="tp-veil" class="tp-veil">
+        <button id="tp-veil-close" type="button" class="tp-veil-close" title="بستن" aria-label="بستن">×</button>
         <h1 id="tp-veil-title">تله‌پرامپتر</h1>
         <p>
           <kbd>فاصله</kbd> شروع و توقف ضبط
@@ -136,6 +175,7 @@
           <kbd>Enter</kbd> قبول و بعدی
           <kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول
           <kbd>چپ</kbd><kbd>راست</kbd> اندازه‌ی متن
+          <kbd>Esc</kbd> بستن
         </p>
         <p>کلمه‌های رنگی تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
         <button id="tp-go" type="button">شروع</button>
@@ -143,22 +183,66 @@
     </section>
   </main>
 </div>
-<footer class="site-footer">
-  <p class="brand-logo" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</p>
-  <p class="footer-credit">طراحی شده با هوش مصنوعی توسط <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>
-  <div class="footer-tools">
-    <button id="theme-toggle" type="button" class="icon-btn theme-toggle" title="حالت روشن یا تیره" aria-label="حالت روشن یا تیره">
-      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 7 7 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-    </button>
-    <a href="/help.html" class="icon-btn help-link" title="راهنما" aria-label="راهنما">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.7 2.2c-.9.5-1.3 1-1.3 2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></svg>
-    </a>
+<div id="settings-layer" class="settings-layer" hidden>
+  <div class="settings-page">
+    <h1>تنظیمات</h1>
+    <div class="settings-tabs" role="tablist">
+      <button type="button" class="on" data-settings-tab="rec">تنظیمات ضبط</button>
+      <button type="button" data-settings-tab="look">تنظیمات ظاهری</button>
+    </div>
+    <section id="settings-rec">
+      <div class="set-layout">
+        <div class="set-stage-col">
+          <p class="set-kicker">پیش‌نمایش</p>
+          <div id="settings-stage" class="settings-stage"></div>
+          <p class="opt-hint">دوربین یا نسبت را عوض کن. تصویر همین‌جا عوض می‌شود و روی نوشته نمی‌افتد.</p>
+        </div>
+        <div class="set-cards">
+          <label class="set-card">دوربین
+            <select id="camera-select"></select>
+          </label>
+          <label class="set-card">میکروفون
+            <select id="mic-select"></select>
+          </label>
+          <div class="set-card">
+            <span>نسبت تصویر</span>
+            <div class="orientation-group set-ratios">
+              <button id="orientation-landscape" type="button" class="orientation-btn" data-orientation="landscape">افقی</button>
+              <button id="orientation-square" type="button" class="orientation-btn" data-orientation="square">۱:۱</button>
+              <button id="orientation-vertical" type="button" class="orientation-btn" data-orientation="vertical">۹:۱۶</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section id="settings-look" hidden>
+      <div class="set-look">
+        <div class="set-card set-card-roomy">
+          <span>حالت صفحه</span>
+          <div class="theme-switch" dir="ltr">
+            <svg class="theme-side" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 7 7 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            <button id="theme-toggle" type="button" class="theme-knob" role="switch" aria-checked="false" title="حالت روشن یا تیره" aria-label="حالت روشن یا تیره">
+              <span class="knob"></span>
+            </button>
+            <svg class="theme-side" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+        <div class="set-card set-card-roomy">
+          <span>اندازه‌ی نوشته</span>
+          <div class="size-picks" role="group" aria-label="اندازه‌ی نوشته">
+            <button type="button" data-ui-pick="md">معمولی</button>
+            <button type="button" data-ui-pick="lg">درشت</button>
+            <button type="button" data-ui-pick="xl">درشت‌تر</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
-</footer>
+</div>
 <script src="/phone-studio.js"></script>
 <script src="/devices.js"></script>
 <script src="/capture.js"></script>
 <script src="/app.js"></script>
+<script src="/shell.js"></script>
 </body>
 </html>

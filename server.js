@@ -2,10 +2,23 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { parseScript, extractTitle, extractEditableBody } = require('./lib/parse-script');
 const { startPhoneBridge, getPhoneLink } = require('./lib/phone-bridge');
+const {
+  defaultStyle,
+  clampStyle,
+  buildWordsForClips,
+  sanitizeWords,
+  pickDuration,
+  normalizeSavedClips,
+  buildAss,
+  concatFilter,
+  evenDim,
+  resolveFont,
+} = require('./lib/captions');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -37,7 +50,25 @@ function loadConfig() {
 const config = loadConfig();
 const PORT = config.port || 7180;
 const TAKES_DIR = resolveFromRoot(config.takesDir || './takes');
+const OUT_DIR = resolveFromRoot(config.outDir || './out');
+function toolPath(name) {
+  const configured = name === 'ffmpeg' ? config.ffmpeg || 'ffmpeg' : '';
+  if (configured && configured !== 'ffmpeg') {
+    if (fs.existsSync(configured)) {
+      if (name === 'ffmpeg') return configured;
+      const sibling = path.join(path.dirname(configured), name + '.exe');
+      if (fs.existsSync(sibling)) return sibling;
+    }
+  }
+  const vendored = path.join(ROOT, 'vendor', 'ffmpeg', name + '.exe');
+  if (fs.existsSync(vendored)) return vendored;
+  return name === 'ffmpeg' ? configured || 'ffmpeg' : name;
+}
+
+const FFMPEG = toolPath('ffmpeg');
+const FFPROBE = toolPath('ffprobe');
 const MANUAL_DIR = path.join(ROOT, 'manual');
+const TAKE_FILE_RE = /^[0-9]{2}-[0-9]{1,4}\.webm$/;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -46,6 +77,9 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
 };
 
 function sendJson(res, status, data) {
@@ -133,6 +167,371 @@ function makeManualSlug(title) {
     n += 1;
   }
   return slug;
+}
+
+function revealFile(filePath) {
+  const opener = spawn('explorer.exe', ['/select,' + filePath]);
+  opener.on('error', () => {});
+}
+
+function fail(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function runProcess(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args);
+    const out = [];
+    const err = [];
+    child.stdout.on('data', (chunk) => out.push(chunk));
+    child.stderr.on('data', (chunk) => {
+      err.push(chunk);
+      if (Buffer.concat(err).length > 200000) err.shift();
+    });
+    child.on('error', (error) => {
+      if (error.code === 'ENOENT') reject(fail(500, cmd + ' پیدا نشد'));
+      else reject(error);
+    });
+    child.on('close', (code) => {
+      if (code !== 0) {
+        const detail = Buffer.concat(err).toString('utf8').trim().split(/\r?\n/).slice(-6).join(' ');
+        console.error(cmd + ' failed', detail);
+        const base = path.basename(String(cmd)).toLowerCase();
+        reject(fail(500, base.indexOf('ffprobe') === 0 ? 'مدت ویدیو خوانده نشد' : 'ساخت ویدیو نشد'));
+      } else {
+        resolve(Buffer.concat(out).toString('utf8'));
+      }
+    });
+  });
+}
+
+function probeMedia(filePath) {
+  return runProcess(FFPROBE, [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-show_entries',
+    'stream=width,height,codec_type',
+    '-of',
+    'json',
+    filePath,
+  ]).then((raw) => {
+    let data;
+    try {
+      data = JSON.parse(raw || '{}');
+    } catch (err) {
+      throw fail(500, 'مدت ویدیو خوانده نشد');
+    }
+    const duration = Number(data.format && data.format.duration);
+    const streams = data.streams || [];
+    const video = streams.find((stream) => stream.codec_type === 'video') || {};
+    if (!(duration > 0)) throw fail(500, 'مدت ویدیو خوانده نشد');
+    return {
+      duration,
+      width: Number(video.width) || 0,
+      height: Number(video.height) || 0,
+      audio: streams.some((stream) => stream.codec_type === 'audio'),
+    };
+  });
+}
+
+function serveFile(req, res, filePath, contentType) {
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('یافت نشد');
+      return;
+    }
+    const range = req.headers.range;
+    function pipeRange(startAt, endAt, status, headers) {
+      res.writeHead(status, headers);
+      const stream = fs.createReadStream(filePath, { start: startAt, end: endAt });
+      stream.on('error', () => {
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      });
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+    }
+    if (!range) {
+      pipeRange(0, stat.size - 1, 200, {
+        'Content-Type': contentType,
+        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      });
+      return;
+    }
+    const match = /bytes=(\d*)-(\d*)/.exec(range);
+    if (!match) {
+      res.writeHead(416);
+      res.end();
+      return;
+    }
+    const start = match[1] ? parseInt(match[1], 10) : 0;
+    let end = match[2] ? parseInt(match[2], 10) : stat.size - 1;
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= stat.size) {
+      res.writeHead(416, { 'Content-Range': 'bytes */' + stat.size });
+      res.end();
+      return;
+    }
+    pipeRange(start, end, 206, {
+      'Content-Type': contentType,
+      'Content-Length': end - start + 1,
+      'Content-Range': 'bytes ' + start + '-' + end + '/' + stat.size,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    });
+  });
+}
+
+function titleForSlug(slug, session) {
+  try {
+    const hit = listScripts().find((item) => path.basename(item.path, path.extname(item.path)) === slug);
+    if (hit && hit.title) return hit.title;
+  } catch (err) {
+    // the scripts folder can be missing; the session title still works
+  }
+  if (session && session.title) return String(session.title).replace(/[\r\n]/g, ' ').trim().slice(0, 120);
+  return slug;
+}
+
+function captionsPathFor(slug) {
+  return path.join(TAKES_DIR, slug, 'captions.json');
+}
+
+function renderPathFor(slug) {
+  return path.join(OUT_DIR, slug + '-caption.mp4');
+}
+
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function round3(n) {
+  return Math.round(n * 1000) / 1000;
+}
+
+function readCaptions(slug) {
+  const filePath = captionsPathFor(slug);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return readJsonFile(filePath);
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeCaptions(slug, doc) {
+  const dir = path.join(TAKES_DIR, slug);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(captionsPathFor(slug), JSON.stringify(doc, null, 2));
+}
+
+async function loadOrBuildCaptions(slug, force, durationMap) {
+  if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
+  const sessionPath = path.join(TAKES_DIR, slug, 'session.json');
+  if (!fs.existsSync(sessionPath)) throw fail(404, 'هنوز جلسه‌ای ثبت نشده');
+  const session = readJsonFile(sessionPath);
+  const paragraphs = Array.isArray(session.paragraphs) ? session.paragraphs : [];
+  const accepted = paragraphs.filter((item) => item && item.accepted && TAKE_FILE_RE.test(String(item.accepted)));
+  if (!accepted.length) throw fail(400, 'هنوز ضبط قبول‌شده‌ای نیست');
+  const existing = readCaptions(slug);
+  const key = accepted.map((item) => item.index + ':' + item.accepted).join('|');
+  const existingKey =
+    existing && Array.isArray(existing.clips)
+      ? existing.clips.map((clip) => clip.paragraph + ':' + clip.file).join('|')
+      : '';
+  if (existing && existingKey === key && !force) {
+    if (!existing.title) existing.title = titleForSlug(slug, session);
+    return existing;
+  }
+  let cursor = 0;
+  const clips = [];
+  for (let i = 0; i < accepted.length; i++) {
+    const item = accepted[i];
+    const filePath = path.join(TAKES_DIR, slug, item.accepted);
+    if (!isInsideDir(path.join(TAKES_DIR, slug), filePath)) throw fail(403, 'مسیر فایل مجاز نیست');
+    if (!fs.existsSync(filePath)) throw fail(404, 'فایل ضبط پیدا نشد');
+    let duration = pickDuration(item.duration, durationMap && durationMap[item.accepted]);
+    if (!(duration > 0.05)) {
+      const info = await probeMedia(filePath);
+      duration = info.duration;
+    }
+    clips.push({
+      file: item.accepted,
+      paragraph: Number(item.index),
+      start: round3(cursor),
+      duration: round3(duration),
+      text: String(item.text || ''),
+    });
+    cursor += duration;
+  }
+  const doc = {
+    slug,
+    title: titleForSlug(slug, session),
+    style: existing && existing.style ? clampStyle(existing.style) : defaultStyle(),
+    cameras: Array.isArray(session.cameras) ? session.cameras.slice() : [],
+    clips: clips.map((clip) => ({
+      file: clip.file,
+      paragraph: clip.paragraph,
+      start: clip.start,
+      duration: clip.duration,
+      camera: '0',
+    })),
+    words: buildWordsForClips(clips),
+    updatedAt: new Date().toISOString(),
+  };
+  writeCaptions(slug, doc);
+  return doc;
+}
+
+function saveCaptionEdits(slug, body) {
+  if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
+  const existing = readCaptions(slug);
+  if (!existing || !Array.isArray(existing.clips) || !existing.clips.length) {
+    throw fail(404, 'اول زیرنویس ساخته شود');
+  }
+  const clips = normalizeSavedClips(existing.clips, body.clips);
+  const words = sanitizeWords(body.words, clips);
+  if (!words.length) throw fail(400, 'کلمه‌ای برای زیرنویس نمانده');
+  const doc = {
+    slug,
+    title: existing.title || titleForSlug(slug, null),
+    style: clampStyle(body.style || {}),
+    cameras: Array.isArray(existing.cameras) ? existing.cameras.slice() : [],
+    clips,
+    words,
+    updatedAt: new Date().toISOString(),
+  };
+  writeCaptions(slug, doc);
+  return doc;
+}
+
+function listArchive() {
+  if (!fs.existsSync(TAKES_DIR)) return [];
+  const items = fs
+    .readdirSync(TAKES_DIR)
+    .filter((slug) => SLUG_RE.test(slug))
+    .map((slug) => {
+      const sessionPath = path.join(TAKES_DIR, slug, 'session.json');
+      if (!fs.existsSync(sessionPath)) return null;
+      let session;
+      try {
+        session = readJsonFile(sessionPath);
+      } catch (err) {
+        return null;
+      }
+      const paragraphs = Array.isArray(session.paragraphs) ? session.paragraphs : [];
+      const accepted = paragraphs.filter((item) => item && item.accepted);
+      if (!accepted.length) return null;
+      const captions = readCaptions(slug);
+      const duration =
+        captions && Array.isArray(captions.clips)
+          ? captions.clips.reduce((sum, clip) => sum + (Number(clip.duration) || 0), 0)
+          : null;
+      return {
+        slug,
+        title: titleForSlug(slug, session),
+        updatedAt: fs.statSync(sessionPath).mtimeMs,
+        acceptedCount: accepted.length,
+        paragraphCount: paragraphs.length,
+        duration,
+        hasRender: fs.existsSync(renderPathFor(slug)),
+      };
+    })
+    .filter(Boolean);
+  items.sort((a, b) => b.updatedAt - a.updatedAt);
+  return items;
+}
+
+function deleteRecording(slug) {
+  if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
+  const dir = path.resolve(TAKES_DIR, slug);
+  if (!isInsideDir(TAKES_DIR, dir)) throw fail(403, 'این مسیر مجاز نیست');
+  fs.rmSync(dir, { recursive: true, force: true });
+  const rendered = path.resolve(renderPathFor(slug));
+  if (isInsideDir(OUT_DIR, rendered) && fs.existsSync(rendered)) fs.rmSync(rendered, { force: true });
+}
+
+async function burnCaptions(slug, metrics) {
+  if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
+  const doc = readCaptions(slug);
+  if (!doc || !Array.isArray(doc.clips) || !doc.clips.length || !Array.isArray(doc.words) || !doc.words.length) {
+    throw fail(404, 'اول زیرنویس را ذخیره کن');
+  }
+  const style = clampStyle(doc.style);
+  const font = resolveFont(style.font, PUBLIC_DIR) || resolveFont('vazir', PUBLIC_DIR);
+  if (!font) throw fail(500, 'فونت زیرنویس پیدا نشد');
+  const metas = [];
+  for (let i = 0; i < doc.clips.length; i++) {
+    const clip = doc.clips[i];
+    if (!TAKE_FILE_RE.test(String(clip.file || ''))) throw fail(400, 'اسم فایل ضبط درست نیست');
+    const filePath = path.join(TAKES_DIR, slug, clip.file);
+    if (!isInsideDir(path.join(TAKES_DIR, slug), filePath) || !fs.existsSync(filePath)) {
+      throw fail(404, 'فایل ضبط پیدا نشد');
+    }
+    const info = await probeMedia(filePath);
+    const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
+    const srcIn = Math.max(0, Number(clip.srcIn) || 0);
+    const srcSpan = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || info.duration;
+    const volume = clip.volume == null ? 1 : Number(clip.volume);
+    metas.push({
+      filePath,
+      duration: Number(clip.duration) || info.duration,
+      audio: info.audio,
+      info,
+      srcIn,
+      srcSpan,
+      speed,
+      volume,
+    });
+  }
+  const width = evenDim(metas[0].info.width);
+  const height = evenDim(metas[0].info.height);
+  if (width < 2 || height < 2) throw fail(500, 'اندازه‌ی ویدیو خوانده نشد');
+  const assPath = path.join(TAKES_DIR, slug, 'captions.ass');
+  fs.writeFileSync(assPath, '\uFEFF' + buildAss(doc, width, height, font.name, metrics), 'utf8');
+  const fontDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-font-'));
+  try {
+    fs.copyFileSync(font.file, path.join(fontDir, path.basename(font.file)));
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+    const outFile = renderPathFor(slug);
+    const args = ['-y', '-hide_banner'];
+    metas.forEach((meta) => {
+      args.push('-i', meta.filePath);
+    });
+    args.push(
+      '-filter_complex',
+      concatFilter(metas, width, height, assPath, fontDir),
+      '-map',
+      '[vout]',
+      '-map',
+      '[ac]',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '20',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '160k',
+      '-movflags',
+      '+faststart',
+      outFile
+    );
+    await runProcess(FFMPEG, args);
+    return { ok: true, file: path.basename(outFile) };
+  } finally {
+    fs.rmSync(fontDir, { recursive: true, force: true });
+  }
 }
 
 function buildManualMarkdown(title, text) {
@@ -324,6 +723,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/open-export' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const filePath = path.resolve(renderPathFor(slug));
+    if (!isInsideDir(OUT_DIR, filePath) || !fs.existsSync(filePath)) {
+      sendJson(res, 404, { error: 'هنوز فایلی ساخته نشده' });
+      return;
+    }
+    revealFile(filePath);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   if (pathname === '/api/open-folder' && req.method === 'POST') {
     const slug = parsed.searchParams.get('slug');
     if (!slug || !SLUG_RE.test(slug)) {
@@ -374,6 +789,154 @@ const server = http.createServer((req, res) => {
         sendJson(res, 200, { ok: true });
       })
       .catch((err) => sendJson(res, 400, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/archive' && req.method === 'GET') {
+    try {
+      sendJson(res, 200, listArchive());
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/recording' && req.method === 'DELETE') {
+    try {
+      deleteRecording(parsed.searchParams.get('slug'));
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, err.status || 500, { error: err.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/captions' && req.method === 'GET') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const doc = readCaptions(slug);
+    if (!doc) {
+      sendJson(res, 404, { error: 'زیرنویسی ذخیره نشده' });
+      return;
+    }
+    sendJson(res, 200, Object.assign({}, doc, { hasRender: fs.existsSync(renderPathFor(slug)) }));
+    return;
+  }
+
+  if (pathname === '/api/captions' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    readRawBody(req)
+      .then((buffer) => {
+        if (buffer.length > 2000000) {
+          sendJson(res, 400, { error: 'حجم زیرنویس خیلی زیاد است' });
+          return;
+        }
+        let body;
+        try {
+          body = JSON.parse(buffer.toString('utf8'));
+        } catch (err) {
+          sendJson(res, 400, { error: 'متن قابل خوندن نبود' });
+          return;
+        }
+        try {
+          sendJson(res, 200, saveCaptionEdits(slug, body));
+        } catch (err) {
+          sendJson(res, err.status || 500, { error: err.message });
+        }
+      })
+      .catch((err) => sendJson(res, 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/captions/build' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    const force = parsed.searchParams.get('force') === '1';
+    readRawBody(req)
+      .then((buffer) => {
+        let durationMap = null;
+        if (buffer.length) {
+          try {
+            const body = JSON.parse(buffer.toString('utf8'));
+            if (body && body.durations && typeof body.durations === 'object') durationMap = body.durations;
+          } catch (err) {
+            durationMap = null;
+          }
+        }
+        return loadOrBuildCaptions(slug, force, durationMap);
+      })
+      .then((doc) => sendJson(res, 200, doc))
+      .catch((err) => sendJson(res, err.status || 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/captions/render' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    readRawBody(req)
+      .then((buffer) => {
+        let metrics = null;
+        if (buffer.length) {
+          try {
+            const body = JSON.parse(buffer.toString('utf8'));
+            if (body && (Array.isArray(body.widths) || Number(body.space) > 0)) metrics = body;
+          } catch (err) {
+            metrics = null;
+          }
+        }
+        return burnCaptions(slug, metrics);
+      })
+      .then((result) => sendJson(res, 200, result))
+      .catch((err) => sendJson(res, err.status || 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/render' && req.method === 'GET') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const filePath = path.resolve(renderPathFor(slug));
+    if (!isInsideDir(OUT_DIR, filePath)) {
+      sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+      return;
+    }
+    serveFile(req, res, filePath, 'video/mp4');
+    return;
+  }
+
+  if (pathname === '/api/take' && req.method === 'GET') {
+    const slug = parsed.searchParams.get('slug');
+    const file = parsed.searchParams.get('file');
+    if (!slug || !SLUG_RE.test(slug) || !file || !TAKE_FILE_RE.test(file)) {
+      sendJson(res, 400, { error: 'فایل ضبط مشخص نیست' });
+      return;
+    }
+    const filePath = path.resolve(TAKES_DIR, slug, file);
+    if (!isInsideDir(path.join(TAKES_DIR, slug), filePath)) {
+      sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+      return;
+    }
+    serveFile(req, res, filePath, 'video/webm');
+    return;
+  }
+
+  if (pathname.startsWith('/fonts/local/')) {
+    const key = pathname.slice('/fonts/local/'.length).replace(/[^a-z0-9_-]/gi, '');
+    if (!key) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('فونت پیدا نشد');
+      return;
+    }
+    const font = resolveFont(key, PUBLIC_DIR);
+    if (!font) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('فونت پیدا نشد');
+      return;
+    }
+    serveFile(req, res, font.file, 'font/ttf');
     return;
   }
 
