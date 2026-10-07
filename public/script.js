@@ -231,7 +231,7 @@
         errorEl.textContent = data.error || 'ذخیره نشد';
         return;
       }
-      location.href = '/?script=' + encodeURIComponent(data.path);
+      location.href = '/scenarios.html';
     } catch (err) {
       errorEl.textContent = 'ذخیره نشد';
     } finally {

@@ -40,7 +40,7 @@
   const preview = document.getElementById('preview');
   const rawCam = document.getElementById('raw-cam');
   const canvas = document.getElementById('frame-canvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
   const meterBar = document.getElementById('meter-bar');
   const readiness = document.getElementById('readiness');
   const splitBtn = document.getElementById('split-cameras');
@@ -178,10 +178,28 @@
     return pick;
   }
 
+  function micPickRank(label) {
+    const text = String(label || '');
+    if (/^Default\s-/i.test(text)) return 1;
+    if (/^Communications\s-/i.test(text)) return 2;
+    return 3;
+  }
+
+  function dedupeMics(mics) {
+    const byGroup = new Map();
+    mics.forEach((device) => {
+      const group = device.groupId || device.deviceId;
+      const rank = micPickRank(device.label);
+      const prev = byGroup.get(group);
+      if (!prev || rank > prev.rank) byGroup.set(group, { device: device, rank: rank });
+    });
+    return Array.from(byGroup.values()).map((row) => row.device);
+  }
+
   async function enumerate(preferredCamera, preferredMic) {
     const devices = await navigator.mediaDevices.enumerateDevices();
     state.cameras = devices.filter((d) => d.kind === 'videoinput');
-    state.mics = devices.filter((d) => d.kind === 'audioinput');
+    state.mics = dedupeMics(devices.filter((d) => d.kind === 'audioinput'));
     const camId = renderCameraSelect(preferredCamera);
     const micId = renderMicSelect(preferredMic);
     return { camId, micId };
@@ -258,40 +276,61 @@
     if (err && err.message === 'phone-mic') {
       return 'میکروفون گوشی هنوز آماده نیست. صفحه‌ی گوشی رو باز نگه دار و چند ثانیه صبر کن';
     }
+    if (err && err.message === 'mic-mismatch') {
+      return 'میکروفون انتخاب‌شده باز نشد. دوباره از تنظیمات انتخابش کن';
+    }
     return 'دوربین یا میکروفون باز نشد';
   }
 
   async function openPhoneMicStream(micId) {
     const id = phoneMicId(micId);
-    const stream = window.__reelPhone && window.__reelPhone.audioStreamFor
-      ? window.__reelPhone.audioStreamFor(id)
-      : null;
-    const track = stream && stream.getAudioTracks()[0];
-    if (!track || track.readyState === 'ended') {
-      throw new Error('phone-mic');
+    if (window.__reelPhone && window.__reelPhone.requestAudio) {
+      window.__reelPhone.requestAudio(id);
     }
-    // Clone so stopping a preview stream never kills the shared phone mic.
-    return new MediaStream([track.clone()]);
+    const deadline = performance.now() + 4000;
+    while (performance.now() < deadline) {
+      const stream = window.__reelPhone && window.__reelPhone.audioStreamFor
+        ? window.__reelPhone.audioStreamFor(id)
+        : null;
+      const track = stream && stream.getAudioTracks()[0];
+      if (track && track.readyState !== 'ended') {
+        return new MediaStream([track.clone()]);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    throw new Error('phone-mic');
+  }
+
+  function assertMicDevice(stream, micId) {
+    if (!micId || isPhoneMic(micId)) return stream;
+    const track = stream && stream.getAudioTracks()[0];
+    if (!track || !track.getSettings) {
+      throw Object.assign(new Error('mic-mismatch'), { name: 'OverconstrainedError' });
+    }
+    const got = track.getSettings().deviceId || '';
+    if (got && got !== micId) {
+      stopTracks(stream.getTracks());
+      throw Object.assign(new Error('mic-mismatch'), { name: 'OverconstrainedError' });
+    }
+    return stream;
   }
 
   async function openDevices(camId, micId) {
-    if (isPhoneMic(micId)) {
-      const videoAttempts = [
+    // Open camera and mic as separate grants so a camera constraint failure
+    // never falls back to the Windows default microphone.
+    let videoStream;
+    if (camId && !String(camId).startsWith('phone')) {
+      videoStream = await openVideoOnly(camId);
+    } else {
+      const attempts = [
         {
-          video: Object.assign(
-            { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-            camId && !String(camId).startsWith('phone') ? { deviceId: { ideal: camId } } : {}
-          ),
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
           audio: false,
         },
-        {
-          video: camId && !String(camId).startsWith('phone') ? { deviceId: { ideal: camId } } : true,
-          audio: false,
-        },
+        { video: true, audio: false },
       ];
-      let videoStream = null;
       let lastErr;
-      for (const constraints of videoAttempts) {
+      for (const constraints of attempts) {
         try {
           videoStream = await navigator.mediaDevices.getUserMedia(constraints);
           break;
@@ -300,58 +339,46 @@
         }
       }
       if (!videoStream) throw lastErr || new Error('camera');
-      const audioStream = await openPhoneMicStream(micId);
-      return new MediaStream(
-        videoStream.getVideoTracks().concat(audioStream.getAudioTracks())
-      );
     }
-    const attempts = [
-      {
-        video: Object.assign(
-          { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-          camId ? { deviceId: { ideal: camId } } : {}
-        ),
-        audio: Object.assign(
-          { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-          micId ? { deviceId: { ideal: micId } } : {}
-        ),
-      },
-      {
-        video: camId ? { deviceId: { ideal: camId } } : true,
-        audio: micId ? { deviceId: { ideal: micId } } : true,
-      },
-      { video: true, audio: true },
-    ];
-    let lastErr;
-    for (const constraints of attempts) {
-      try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (err) {
-        lastErr = err;
-      }
+    let audioStream;
+    try {
+      audioStream = await openMic(micId);
+    } catch (err) {
+      stopTracks(videoStream.getTracks());
+      throw err;
     }
-    throw lastErr;
+    return new MediaStream(videoStream.getVideoTracks().concat(audioStream.getAudioTracks()));
   }
 
   async function openMic(micId) {
     if (isPhoneMic(micId)) return openPhoneMicStream(micId);
-    const attempts = [
-      {
-        audio: Object.assign(
-          { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-          micId ? { deviceId: { ideal: micId } } : {}
-        ),
+    const attempts = [];
+    if (micId) {
+      attempts.push({
+        audio: {
+          deviceId: { exact: micId },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
         video: false,
-      },
-      {
-        audio: micId ? { deviceId: { ideal: micId } } : true,
+      });
+      attempts.push({
+        audio: { deviceId: { exact: micId } },
         video: false,
-      },
-    ];
+      });
+    } else {
+      attempts.push({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        video: false,
+      });
+      attempts.push({ audio: true, video: false });
+    }
     let lastErr;
     for (const constraints of attempts) {
       try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        return assertMicDevice(stream, micId);
       } catch (err) {
         lastErr = err;
       }
@@ -359,9 +386,18 @@
     throw lastErr;
   }
 
+  function mediaSize(source) {
+    if (!source) return { w: 0, h: 0 };
+    return {
+      w: source.videoWidth || source.displayWidth || source.width || 0,
+      h: source.videoHeight || source.displayHeight || source.height || 0,
+    };
+  }
+
   function waitForPhoneFrame(target) {
     function ready() {
-      return target && target.width > 2 && target.height > 2;
+      const size = mediaSize(target);
+      return size.w > 2 && size.h > 2;
     }
     if (ready()) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -477,7 +513,26 @@
     const canvasStream = canvas.captureStream(30);
     state.canvasStream = canvasStream;
     const audioTrack = stream.getAudioTracks()[0];
-    const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
+    let recordedAudio = audioTrack;
+    if (audioTrack) {
+      state.audioContext = new AudioContext();
+      const source = state.audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+      const dest = state.audioContext.createMediaStreamDestination();
+      source.connect(dest);
+      recordedAudio = dest.stream.getAudioTracks()[0] || audioTrack;
+      state.analyser = state.audioContext.createAnalyser();
+      state.analyser.fftSize = 2048;
+      source.connect(state.analyser);
+      // An AnalyserNode with no path to the destination is never pulled by the
+      // audio graph, so it never updates. Route it through a silent gain node
+      // instead of playing the microphone back out loud.
+      const silentSink = state.audioContext.createGain();
+      silentSink.gain.value = 0;
+      state.analyser.connect(silentSink);
+      silentSink.connect(state.audioContext.destination);
+      if (state.audioContext.state === 'suspended') state.audioContext.resume().catch(() => {});
+    }
+    const combined = canvasStream.getVideoTracks().concat(recordedAudio ? [recordedAudio] : []);
     state.stream = new MediaStream(combined);
     preview.srcObject = state.stream;
 
@@ -486,20 +541,6 @@
     readiness.dataset.mic = audioTrack ? audioTrack.label : 'بدون میکروفون';
     readiness.dataset.resolution = `${canvas.width}x${canvas.height}`;
 
-    state.audioContext = new AudioContext();
-    const source = state.audioContext.createMediaStreamSource(stream);
-    state.analyser = state.audioContext.createAnalyser();
-    state.analyser.fftSize = 2048;
-    source.connect(state.analyser);
-    // An AnalyserNode with no path to the destination is never pulled by the
-    // audio graph, so it never updates. Route it through a silent gain node
-    // instead of playing the microphone back out loud.
-    const silentSink = state.audioContext.createGain();
-    silentSink.gain.value = 0;
-    state.analyser.connect(silentSink);
-    silentSink.connect(state.audioContext.destination);
-
-    if (state.audioContext.state === 'suspended') state.audioContext.resume().catch(() => {});
     state.phoneNote = '';
     renderReadiness();
     tickMeter();
@@ -640,9 +681,25 @@
   }
 
   function bandBox(index, count, width, height) {
-    const y0 = Math.round((index * height) / count);
-    const y1 = Math.round(((index + 1) * height) / count);
-    return { y: y0, h: y1 - y0, w: width };
+    const portrait = height > width;
+    const grid = !portrait && count === 4;
+    if (grid) {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const x0 = Math.round((col * width) / 2);
+      const x1 = Math.round(((col + 1) * width) / 2);
+      const y0 = Math.round((row * height) / 2);
+      const y1 = Math.round(((row + 1) * height) / 2);
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+    if (portrait) {
+      const y0 = Math.round((index * height) / count);
+      const y1 = Math.round(((index + 1) * height) / count);
+      return { x: 0, y: y0, w: width, h: y1 - y0 };
+    }
+    const x0 = Math.round((index * width) / count);
+    const x1 = Math.round(((index + 1) * width) / count);
+    return { x: x0, y: 0, w: x1 - x0, h: height };
   }
 
   function drawCover(source, destX, destY, destW, destH) {
@@ -683,29 +740,11 @@
       id: cam.deviceId,
       label: cam.label || 'دوربین',
     }));
-    const seen = new Set();
-    if (!state.phoneSticky) state.phoneSticky = {};
     if (window.__reelPhone && window.__reelPhone.cameras) {
       window.__reelPhone.cameras().forEach((phone) => {
-        const id = 'phone:' + phone.id;
-        seen.add(id);
-        // Keep for the whole page session. Expiry caused برش دوربین flicker.
-        state.phoneSticky[id] = {
-          label: phone.label || 'دوربین موبایل',
-          until: Number.MAX_SAFE_INTEGER,
-        };
-        list.push({ id: id, label: state.phoneSticky[id].label });
+        list.push({ id: 'phone:' + phone.id, label: phone.label || 'دوربین موبایل' });
       });
     }
-    Object.keys(state.phoneSticky).forEach((id) => {
-      if (seen.has(id)) return;
-      const row = state.phoneSticky[id];
-      if (!row) {
-        delete state.phoneSticky[id];
-        return;
-      }
-      list.push({ id: id, label: row.label || 'دوربین موبایل' });
-    });
     return list;
   }
 
@@ -719,23 +758,21 @@
     ids.forEach((id) => {
       if (!order.includes(id)) order.push(id);
     });
-    // Keep sticky phone rows even if the live socket blinked away.
-    order = order.filter(
-      (id) => idSet.has(id) || (id.indexOf('phone:') === 0 && state.phoneSticky && state.phoneSticky[id])
-    );
+    order = order.filter((id) => idSet.has(id));
+    const seenLive = seen.filter((id) => id.indexOf('phone:') !== 0 || idSet.has(id));
     if (!enabled) {
       enabled = order.slice();
     } else {
       const prevEnabled = enabled.slice();
       ids.forEach((id) => {
-        if (!seen.includes(id) && !prevEnabled.includes(id)) prevEnabled.push(id);
+        if (!seenLive.includes(id) && !prevEnabled.includes(id)) prevEnabled.push(id);
       });
       enabled = order.filter((id) => prevEnabled.includes(id));
     }
     if (!enabled.length && order.length) enabled = [order[0]];
     writeList('reel.splitOrder', order);
     writeList('reel.splitOn', enabled);
-    writeList('reel.splitSeen', Array.from(new Set(seen.concat(ids))));
+    writeList('reel.splitSeen', Array.from(new Set(seenLive.concat(ids))));
     state.splitOrder = order;
     state.splitOn = enabled;
     return choices;
@@ -848,9 +885,7 @@
       state.extraVideos = opened.map((item) => item.video);
       state.splitSlots = slots;
 
-      const target = state.split
-        ? ORIENTATIONS.vertical
-        : ORIENTATIONS[state.orientation] || ORIENTATIONS.landscape;
+      const target = ORIENTATIONS[state.orientation] || ORIENTATIONS.landscape;
       canvas.width = target.width;
       canvas.height = target.height;
       const corner = document.getElementById('tp-phone-view');
@@ -877,7 +912,7 @@
         } else {
           for (let i = 0; i < slotsNow.length; i++) {
             const box = bandBox(i, count, canvas.width, canvas.height);
-            drawCover(sourceForSlot(slotsNow[i]), 0, box.y, box.w, box.h);
+            drawCover(sourceForSlot(slotsNow[i]), box.x, box.y, box.w, box.h);
           }
         }
         if (cornerCtx) cornerCtx.drawImage(canvas, 0, 0, corner.width, corner.height);
@@ -888,9 +923,13 @@
       const canvasStream = canvas.captureStream(30);
       state.canvasStream = canvasStream;
       const audioTrack = stream.getAudioTracks()[0];
+      let recordedAudio = audioTrack;
       if (audioTrack) {
         state.audioContext = new AudioContext();
-        const source = state.audioContext.createMediaStreamSource(stream);
+        const source = state.audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+        const dest = state.audioContext.createMediaStreamDestination();
+        source.connect(dest);
+        recordedAudio = dest.stream.getAudioTracks()[0] || audioTrack;
         state.analyser = state.audioContext.createAnalyser();
         state.analyser.fftSize = 2048;
         source.connect(state.analyser);
@@ -900,7 +939,7 @@
         silentSink.connect(state.audioContext.destination);
         if (state.audioContext.state === 'suspended') state.audioContext.resume().catch(() => {});
       }
-      const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
+      const combined = canvasStream.getVideoTracks().concat(recordedAudio ? [recordedAudio] : []);
       state.stream = new MediaStream(combined);
       preview.srcObject = state.stream;
       readiness.dataset.camera = state.rotate
@@ -995,13 +1034,13 @@
     orientationButtons().forEach((btn) => {
       const key = btn.getAttribute('data-orientation');
       btn.classList.toggle('on', state.orientation === key);
-      btn.disabled = !!state.split;
+      btn.disabled = false;
     });
     const home = document.getElementById('stage-home');
     if (home) {
       home.classList.toggle('is-landscape', state.orientation === 'landscape');
       home.classList.toggle('is-square', state.orientation === 'square');
-      home.classList.toggle('is-vertical', state.orientation === 'vertical' || !!state.split);
+      home.classList.toggle('is-vertical', state.orientation === 'vertical');
     }
   }
 
@@ -1131,19 +1170,7 @@
     if (turningOff) {
       state.split = false;
       state.rotate = false;
-      if (state.savedOrientation && ORIENTATIONS[state.savedOrientation]) {
-        state.orientation = state.savedOrientation;
-      }
     } else {
-      if (nextSplit && !state.split) {
-        state.savedOrientation = state.orientation;
-        state.orientation = 'vertical';
-      }
-      if (nextRotate && state.split) {
-        if (state.savedOrientation && ORIENTATIONS[state.savedOrientation]) {
-          state.orientation = state.savedOrientation;
-        }
-      }
       if (nextSplit && state.rotate) state.rotate = false;
       if (nextRotate && state.split) state.split = false;
       state.split = nextSplit;
@@ -1167,7 +1194,6 @@
   }
 
   async function setOrientation(orientation) {
-    if (state.split) return;
     if (state.orientation === orientation) return;
     state.orientation = orientation;
     storeId('reel.orientation', orientation);
@@ -1186,7 +1212,6 @@
     state.rotate = !state.split && loadStoredId('reel.rotate') === '1';
     const storedCut = Number(loadStoredId('reel.cutSeconds'));
     state.cutSeconds = Number.isFinite(storedCut) && storedCut > 0 ? storedCut : 1.5;
-    if (state.split) state.orientation = 'vertical';
     renderSplitButton();
     renderOrientationButtons();
     orientationButtons().forEach((btn) => {
@@ -1207,6 +1232,9 @@
     });
     micSelect.addEventListener('change', async () => {
       storeId('reel.micId', micSelect.value);
+      if (!isPhoneMic(micSelect.value) && window.__reelPhone && window.__reelPhone.stopAudio) {
+        window.__reelPhone.stopAudio();
+      }
       try {
         await startPreview(cameraSelect.value, micSelect.value);
       } catch (err) {
@@ -1247,12 +1275,13 @@
             });
           }
           if (multiActive()) {
-            if (!connected) state.phoneNote = 'دوربین موبایل قطع شد';
-            else state.phoneNote = '';
             renderReadiness();
             renderSplitPicks();
-            // Never bounce the live multi preview on a status blink. Phone
-            // canvas keeps painting; restarting here made the picker flicker.
+            if (!captureBusy()) {
+              startPreview(cameraSelect.value, micSelect.value).catch((err) => {
+                if (!streamIsLive()) showMediaError(err);
+              });
+            }
             return;
           }
           const chosenGone =
@@ -1278,7 +1307,7 @@
           startPreview(cameraSelect.value, micSelect.value).catch((err) => {
             if (!streamIsLive()) showMediaError(err);
           });
-        }, 250);
+        }, 40);
       };
     }
 

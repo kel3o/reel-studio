@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { parseScript, extractTitle, extractEditableBody } = require('./lib/parse-script');
 const { startPhoneBridge, getPhoneLink } = require('./lib/phone-bridge');
@@ -14,8 +15,10 @@ const {
   sanitizeWords,
   pickDuration,
   normalizeSavedClips,
+  sanitizeLanes,
   buildAss,
   concatFilter,
+  stackFilter,
   evenDim,
   resolveFont,
 } = require('./lib/captions');
@@ -69,6 +72,16 @@ const FFMPEG = toolPath('ffmpeg');
 const FFPROBE = toolPath('ffprobe');
 const MANUAL_DIR = path.join(ROOT, 'manual');
 const TAKE_FILE_RE = /^[0-9]{2}-[0-9]{1,4}\.webm$/;
+const TAKE_AUDIO_FILE_RE = /^[0-9]{2}-[0-9]{1,4}-a\.(webm|m4a|ogg)$/;
+const ATTACH_FILE_RE = /^attach-[a-f0-9]{12}\.(webm|mp4|mov|mp3|wav|m4a|aac|ogg)$/;
+function isClipFile(name) {
+  const value = String(name || '');
+  return TAKE_FILE_RE.test(value) || TAKE_AUDIO_FILE_RE.test(value) || ATTACH_FILE_RE.test(value);
+}
+
+function isAudioOnlyExt(ext) {
+  return ext === 'mp3' || ext === 'wav' || ext === 'm4a' || ext === 'aac' || ext === 'ogg';
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -80,6 +93,12 @@ const MIME = {
   '.ttf': 'font/ttf',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
 };
 
 function sendJson(res, status, data) {
@@ -233,9 +252,44 @@ function probeMedia(filePath) {
       duration,
       width: Number(video.width) || 0,
       height: Number(video.height) || 0,
+      video: streams.some((stream) => stream.codec_type === 'video'),
       audio: streams.some((stream) => stream.codec_type === 'audio'),
     };
   });
+}
+
+function audioCompanionName(videoFile) {
+  const match = /^([0-9]{2}-[0-9]{1,4})\.webm$/i.exec(String(videoFile || ''));
+  if (!match) return '';
+  return match[1] + '-a.webm';
+}
+
+async function extractAudioFile(srcPath, destPath) {
+  await runProcess(FFMPEG, [
+    '-y',
+    '-hide_banner',
+    '-i',
+    srcPath,
+    '-vn',
+    '-c:a',
+    'libopus',
+    '-b:a',
+    '128k',
+    destPath,
+  ]);
+}
+
+function ensureAudioLane(lanes) {
+  const list = Array.isArray(lanes) ? lanes.slice() : [];
+  if (list.some((lane) => lane && lane.kind === 'audio')) return list;
+  list.push({ id: 'audio', label: 'صدا', kind: 'audio', band: 0, bands: 1, file: '' });
+  return list;
+}
+
+function videoLaneCount(lanes) {
+  const list = Array.isArray(lanes) ? lanes : [];
+  const count = list.filter((lane) => lane && lane.kind !== 'audio').length;
+  return Math.max(1, count);
 }
 
 function serveFile(req, res, filePath, contentType) {
@@ -331,6 +385,43 @@ function writeCaptions(slug, doc) {
   fs.writeFileSync(captionsPathFor(slug), JSON.stringify(doc, null, 2));
 }
 
+async function ensureTakeAudio(slug, videoFile, preferredAudio) {
+  const dir = path.join(TAKES_DIR, slug);
+  const preferred = String(preferredAudio || '');
+  if (preferred && TAKE_AUDIO_FILE_RE.test(preferred)) {
+    const preferredPath = path.join(dir, preferred);
+    if (isInsideDir(dir, preferredPath) && fs.existsSync(preferredPath)) return preferred;
+  }
+  const audioName = audioCompanionName(videoFile);
+  if (!audioName) return '';
+  const audioPath = path.join(dir, audioName);
+  if (fs.existsSync(audioPath)) return audioName;
+  const videoPath = path.join(dir, videoFile);
+  if (!fs.existsSync(videoPath)) return '';
+  try {
+    const info = await probeMedia(videoPath);
+    if (!info.audio) return '';
+    await extractAudioFile(videoPath, audioPath);
+    return audioName;
+  } catch (err) {
+    return '';
+  }
+}
+
+function defaultVideoLanes(cameras) {
+  if (Array.isArray(cameras) && cameras.length > 1) {
+    return cameras.map((label, index) => ({
+      id: 'cam-' + index,
+      label: label || 'دوربین ' + (index + 1),
+      kind: 'band',
+      band: index,
+      bands: cameras.length,
+      file: '',
+    }));
+  }
+  return [{ id: 'main', label: 'ویدیو', kind: 'full', band: 0, bands: 1, file: '' }];
+}
+
 async function loadOrBuildCaptions(slug, force, durationMap) {
   if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
   const sessionPath = path.join(TAKES_DIR, slug, 'session.json');
@@ -343,14 +434,58 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
   const key = accepted.map((item) => item.index + ':' + item.accepted).join('|');
   const existingKey =
     existing && Array.isArray(existing.clips)
-      ? existing.clips.map((clip) => clip.paragraph + ':' + clip.file).join('|')
+      ? existing.clips
+          .filter((clip) => TAKE_FILE_RE.test(String(clip.file || '')))
+          .map((clip) => clip.paragraph + ':' + clip.file)
+          .join('|')
       : '';
-  if (existing && existingKey === key && !force) {
+  const hasAudioLane =
+    existing && Array.isArray(existing.lanes) && existing.lanes.some((lane) => lane && lane.kind === 'audio');
+  if (existing && existingKey === key && !force && hasAudioLane) {
     if (!existing.title) existing.title = titleForSlug(slug, session);
     return existing;
   }
+  if (existing && existingKey === key && !force && !hasAudioLane) {
+    const lanes = ensureAudioLane(sanitizeLanes(existing.lanes || defaultVideoLanes(session.cameras || [])));
+    const clips = Array.isArray(existing.clips) ? existing.clips.slice() : [];
+    for (let i = 0; i < accepted.length; i++) {
+      const item = accepted[i];
+      const videoClip = clips.find(
+        (clip) => TAKE_FILE_RE.test(String(clip.file || '')) && Number(clip.paragraph) === Number(item.index)
+      );
+      if (videoClip) videoClip.volume = 0;
+      const already = clips.some(
+        (clip) =>
+          (clip.lane === 'audio' || TAKE_AUDIO_FILE_RE.test(String(clip.file || ''))) &&
+          Number(clip.paragraph) === Number(item.index)
+      );
+      if (already) continue;
+      const audioFile = await ensureTakeAudio(slug, item.accepted, item.acceptedAudio);
+      if (!audioFile || !videoClip) continue;
+      clips.push({
+        file: audioFile,
+        paragraph: Number(item.index),
+        start: Number(videoClip.start) || 0,
+        duration: Number(videoClip.duration) || 0,
+        volume: 1,
+        camera: 'audio',
+        lane: 'audio',
+      });
+    }
+    existing.lanes = lanes;
+    existing.clips = clips;
+    existing.updatedAt = new Date().toISOString();
+    if (!existing.title) existing.title = titleForSlug(slug, session);
+    writeCaptions(slug, existing);
+    return existing;
+  }
   let cursor = 0;
-  const clips = [];
+  const videoClips = [];
+  const audioClips = [];
+  const wordSource = [];
+  const cameras = Array.isArray(session.cameras) ? session.cameras.slice() : [];
+  const videoLanes = defaultVideoLanes(cameras);
+  const primaryLane = videoLanes[0] ? videoLanes[0].id : 'main';
   for (let i = 0; i < accepted.length; i++) {
     const item = accepted[i];
     const filePath = path.join(TAKES_DIR, slug, item.accepted);
@@ -361,28 +496,47 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
       const info = await probeMedia(filePath);
       duration = info.duration;
     }
-    clips.push({
+    const start = round3(cursor);
+    const dur = round3(duration);
+    videoClips.push({
       file: item.accepted,
       paragraph: Number(item.index),
-      start: round3(cursor),
-      duration: round3(duration),
+      start,
+      duration: dur,
+      volume: 0,
+      camera: primaryLane,
+      lane: primaryLane,
+    });
+    wordSource.push({
+      file: item.accepted,
+      paragraph: Number(item.index),
+      start,
+      duration: dur,
       text: String(item.text || ''),
     });
+    const audioFile = await ensureTakeAudio(slug, item.accepted, item.acceptedAudio);
+    if (audioFile) {
+      audioClips.push({
+        file: audioFile,
+        paragraph: Number(item.index),
+        start,
+        duration: dur,
+        volume: 1,
+        camera: 'audio',
+        lane: 'audio',
+      });
+    }
     cursor += duration;
   }
+  const lanes = ensureAudioLane(videoLanes);
   const doc = {
     slug,
     title: titleForSlug(slug, session),
     style: existing && existing.style ? clampStyle(existing.style) : defaultStyle(),
-    cameras: Array.isArray(session.cameras) ? session.cameras.slice() : [],
-    clips: clips.map((clip) => ({
-      file: clip.file,
-      paragraph: clip.paragraph,
-      start: clip.start,
-      duration: clip.duration,
-      camera: '0',
-    })),
-    words: buildWordsForClips(clips),
+    cameras,
+    lanes,
+    clips: videoClips.concat(audioClips),
+    words: buildWordsForClips(wordSource),
     updatedAt: new Date().toISOString(),
   };
   writeCaptions(slug, doc);
@@ -395,7 +549,15 @@ function saveCaptionEdits(slug, body) {
   if (!existing || !Array.isArray(existing.clips) || !existing.clips.length) {
     throw fail(404, 'اول زیرنویس ساخته شود');
   }
-  const clips = normalizeSavedClips(existing.clips, body.clips);
+  const lanes = ensureAudioLane(sanitizeLanes(body.lanes));
+  const extraFiles = [];
+  (Array.isArray(body.clips) ? body.clips : []).forEach((clip) => {
+    const file = String(clip && clip.file || '');
+    if (!ATTACH_FILE_RE.test(file) && !TAKE_AUDIO_FILE_RE.test(file)) return;
+    const full = path.resolve(TAKES_DIR, slug, file);
+    if (isInsideDir(path.join(TAKES_DIR, slug), full) && fs.existsSync(full)) extraFiles.push(file);
+  });
+  const clips = normalizeSavedClips(existing.clips, body.clips, extraFiles);
   const words = sanitizeWords(body.words, clips);
   if (!words.length) throw fail(400, 'کلمه‌ای برای زیرنویس نمانده');
   const doc = {
@@ -403,6 +565,7 @@ function saveCaptionEdits(slug, body) {
     title: existing.title || titleForSlug(slug, null),
     style: clampStyle(body.style || {}),
     cameras: Array.isArray(existing.cameras) ? existing.cameras.slice() : [],
+    lanes,
     clips,
     words,
     updatedAt: new Date().toISOString(),
@@ -469,7 +632,7 @@ async function burnCaptions(slug, metrics) {
   const metas = [];
   for (let i = 0; i < doc.clips.length; i++) {
     const clip = doc.clips[i];
-    if (!TAKE_FILE_RE.test(String(clip.file || ''))) throw fail(400, 'اسم فایل ضبط درست نیست');
+    if (!isClipFile(clip.file)) throw fail(400, 'اسم فایل ضبط درست نیست');
     const filePath = path.join(TAKES_DIR, slug, clip.file);
     if (!isInsideDir(path.join(TAKES_DIR, slug), filePath) || !fs.existsSync(filePath)) {
       throw fail(404, 'فایل ضبط پیدا نشد');
@@ -479,19 +642,38 @@ async function burnCaptions(slug, metrics) {
     const srcIn = Math.max(0, Number(clip.srcIn) || 0);
     const srcSpan = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || info.duration;
     const volume = clip.volume == null ? 1 : Number(clip.volume);
+    const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
+    const videoLanes = lanes.filter((item) => item && item.kind !== 'audio');
+    const lane = lanes.find((item) => item.id === clip.lane) || null;
+    const isAudioLane = !!(lane && lane.kind === 'audio');
+    const videoLaneIndex = isAudioLane
+      ? -1
+      : Math.max(
+          0,
+          videoLanes.findIndex((item) => item.id === (lane ? lane.id : videoLanes[0] && videoLanes[0].id))
+        );
     metas.push({
       filePath,
       duration: Number(clip.duration) || info.duration,
       audio: info.audio,
+      video: info.video,
       info,
       srcIn,
       srcSpan,
       speed,
-      volume,
+      volume: isAudioLane ? volume : 0,
+      start: Number(clip.start) || 0,
+      laneIndex: videoLaneIndex,
+      cropBands: lane && lane.kind === 'band' ? lane.bands : 0,
+      cropBand: lane && lane.kind === 'band' ? lane.band : 0,
+      useAudio: isAudioLane,
+      audioOnly: isAudioLane || (!info.video && !!info.audio),
     });
   }
-  const width = evenDim(metas[0].info.width);
-  const height = evenDim(metas[0].info.height);
+  const visualMetas = metas.filter((meta) => !meta.audioOnly && meta.video !== false && Number(meta.laneIndex) >= 0);
+  const sizeSource = visualMetas[0] || metas.find((meta) => meta.info && meta.info.width) || metas[0];
+  const width = evenDim(sizeSource.info.width);
+  const height = evenDim(sizeSource.info.height);
   if (width < 2 || height < 2) throw fail(500, 'اندازه‌ی ویدیو خوانده نشد');
   const assPath = path.join(TAKES_DIR, slug, 'captions.ass');
   fs.writeFileSync(assPath, '\uFEFF' + buildAss(doc, width, height, font.name, metrics), 'utf8');
@@ -504,9 +686,15 @@ async function burnCaptions(slug, metrics) {
     metas.forEach((meta) => {
       args.push('-i', meta.filePath);
     });
+    const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
+    const vCount = videoLaneCount(lanes);
+    const filter =
+      vCount > 1
+        ? stackFilter(metas, width, height, vCount, assPath, fontDir)
+        : concatFilter(metas, width, height, assPath, fontDir);
     args.push(
       '-filter_complex',
-      concatFilter(metas, width, height, assPath, fontDir),
+      filter,
       '-map',
       '[vout]',
       '-map',
@@ -703,10 +891,44 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/manual-script' && req.method === 'DELETE') {
+    const scriptPath = parsed.searchParams.get('path');
+    const fileName = parsed.searchParams.get('file');
+    let resolved = '';
+    if (fileName) {
+      if (!/^[A-Za-z0-9._-]+\.md$/i.test(fileName)) {
+        sendJson(res, 400, { error: 'اسم فایل درست نیست' });
+        return;
+      }
+      resolved = path.join(MANUAL_DIR, fileName);
+    } else if (scriptPath) {
+      resolved = path.resolve(scriptPath);
+    } else {
+      sendJson(res, 400, { error: 'مسیر فایل لازم است' });
+      return;
+    }
+    if (!isInsideDir(MANUAL_DIR, resolved) || !resolved.toLowerCase().endsWith('.md')) {
+      sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+      return;
+    }
+    if (!fs.existsSync(resolved)) {
+      sendJson(res, 404, { error: 'فایل پیدا نشد' });
+      return;
+    }
+    try {
+      fs.unlinkSync(resolved);
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
   if (pathname === '/api/clip' && req.method === 'POST') {
     const slug = parsed.searchParams.get('slug');
     const paragraph = parsed.searchParams.get('paragraph');
     const take = parsed.searchParams.get('take');
+    const kind = String(parsed.searchParams.get('kind') || '') === 'audio' ? 'audio' : 'video';
     if (!slug || !SLUG_RE.test(slug) || !NUMBER_RE.test(paragraph || '') || !NUMBER_RE.test(take || '')) {
       sendJson(res, 400, { error: 'اسم سناریو، شماره پاراگراف و شماره ضبط لازم است' });
       return;
@@ -715,7 +937,7 @@ const server = http.createServer((req, res) => {
       .then((buffer) => {
         const dir = path.join(TAKES_DIR, slug);
         fs.mkdirSync(dir, { recursive: true });
-        const fileName = `${paragraph}-${take}.webm`;
+        const fileName = kind === 'audio' ? `${paragraph}-${take}-a.webm` : `${paragraph}-${take}.webm`;
         fs.writeFileSync(path.join(dir, fileName), buffer);
         sendJson(res, 200, { file: fileName });
       })
@@ -907,10 +1129,97 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/attach' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    if (!slug || !SLUG_RE.test(slug)) {
+      sendJson(res, 400, { error: 'اسم سناریو لازم است' });
+      return;
+    }
+    const rawExt = String(parsed.searchParams.get('ext') || 'webm').toLowerCase();
+    const split = String(parsed.searchParams.get('split') || '') === '1';
+    const ext =
+      rawExt === 'mp4' ||
+      rawExt === 'mov' ||
+      rawExt === 'webm' ||
+      rawExt === 'mp3' ||
+      rawExt === 'wav' ||
+      rawExt === 'm4a' ||
+      rawExt === 'aac' ||
+      rawExt === 'ogg'
+        ? rawExt
+        : '';
+    if (!ext) {
+      sendJson(res, 400, { error: 'این نوع فایل قابل قبول نیست' });
+      return;
+    }
+    readRawBody(req)
+      .then(async (buffer) => {
+        if (!buffer.length || buffer.length > 250 * 1024 * 1024) {
+          sendJson(res, 400, { error: 'حجم فایل مناسب نیست' });
+          return;
+        }
+        const dir = path.join(TAKES_DIR, slug);
+        if (!isInsideDir(TAKES_DIR, path.resolve(dir))) {
+          sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+          return;
+        }
+        fs.mkdirSync(dir, { recursive: true });
+        const file = 'attach-' + crypto.randomBytes(6).toString('hex') + '.' + ext;
+        const full = path.join(dir, file);
+        fs.writeFileSync(full, buffer);
+        let duration = 0;
+        let info = null;
+        try {
+          info = await probeMedia(full);
+          duration = info.duration || 0;
+        } catch (err) {
+          duration = 0;
+        }
+        const payload = {
+          file,
+          duration,
+          hasVideo: !!(info && info.video),
+          hasAudio: !!(info && info.audio),
+          audioOnly: isAudioOnlyExt(ext) || !!(info && info.audio && !info.video),
+        };
+        if (split && info && info.video && info.audio) {
+          const audioFile = 'attach-' + crypto.randomBytes(6).toString('hex') + '.m4a';
+          const audioFull = path.join(dir, audioFile);
+          try {
+            await runProcess(FFMPEG, [
+              '-y',
+              '-hide_banner',
+              '-i',
+              full,
+              '-vn',
+              '-c:a',
+              'aac',
+              '-b:a',
+              '160k',
+              audioFull,
+            ]);
+            let audioDuration = duration;
+            try {
+              const audioInfo = await probeMedia(audioFull);
+              audioDuration = audioInfo.duration || duration;
+            } catch (err) {}
+            payload.audioFile = audioFile;
+            payload.audioDuration = audioDuration;
+          } catch (err) {
+            sendJson(res, 500, { error: 'صدای ویدیو جدا نشد' });
+            return;
+          }
+        }
+        sendJson(res, 200, payload);
+      })
+      .catch((err) => sendJson(res, 500, { error: err.message }));
+    return;
+  }
+
   if (pathname === '/api/take' && req.method === 'GET') {
     const slug = parsed.searchParams.get('slug');
     const file = parsed.searchParams.get('file');
-    if (!slug || !SLUG_RE.test(slug) || !file || !TAKE_FILE_RE.test(file)) {
+    if (!slug || !SLUG_RE.test(slug) || !file || !isClipFile(file)) {
       sendJson(res, 400, { error: 'فایل ضبط مشخص نیست' });
       return;
     }
@@ -919,7 +1228,8 @@ const server = http.createServer((req, res) => {
       sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
       return;
     }
-    serveFile(req, res, filePath, 'video/webm');
+    const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+    serveFile(req, res, filePath, type);
     return;
   }
 

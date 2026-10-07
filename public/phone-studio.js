@@ -4,10 +4,6 @@
   emptyCanvas.height = 0;
 
   const phones = new Map();
-  // Once a phone has been seen this session, keep its id/label in the
-  // dashboard picker even if the socket blinks. Live frames still come only
-  // from the phones Map.
-  const remembered = new Map();
   const api = {
     id: 'phone',
     canvas: emptyCanvas,
@@ -16,15 +12,8 @@
     lagMs: 0,
     cameras: function () {
       const list = [];
-      const seen = {};
       phones.forEach(function (phone) {
-        seen[phone.id] = true;
-        remembered.set(phone.id, phone.label || 'دوربین موبایل');
         list.push({ id: phone.id, label: phone.label, canvas: phone.canvas, hasFrame: phone.hasFrame });
-      });
-      remembered.forEach(function (label, id) {
-        if (seen[id]) return;
-        list.push({ id: id, label: label, canvas: emptyCanvas, hasFrame: false });
       });
       return list;
     },
@@ -53,6 +42,9 @@
   window.__reelPhone = api;
 
   let ws = null;
+  let stunUrl = '';
+  const peers = new Map();
+  const earlyIce = new Map();
   let linkUrl = '';
   let linkKnown = false;
   let statusHandler = null;
@@ -70,11 +62,9 @@
 
   function publishNow() {
     syncHead();
-    // Picker list is remembered cameras. Live link state is separate so a
-    // brief drop does not remove rows from برش دوربین.
-    const signature = Array.from(remembered.entries())
-      .map(function (row) {
-        return row[0] + ':' + row[1];
+    const signature = Array.from(phones.values())
+      .map(function (phone) {
+        return phone.id + ':' + (phone.label || '');
       })
       .sort()
       .join('|');
@@ -175,6 +165,7 @@
       }
     }
     stopPhoneAudio(phone);
+    closePeer(id);
     phones.delete(id);
   }
 
@@ -202,12 +193,12 @@
         audioNext: 0,
         audioListed: false,
         holdTimer: null,
+        video: null,
       };
       phones.set(id, phone);
     } else if (label) {
       phone.label = label;
     }
-    remembered.set(phone.id, phone.label || 'دوربین موبایل');
     if (phone.holdTimer) {
       clearTimeout(phone.holdTimer);
       phone.holdTimer = null;
@@ -227,18 +218,9 @@
     lastPhoneIds = incoming;
     Array.from(phones.keys()).forEach(function (id) {
       if (incoming[id]) return;
-      const phone = phones.get(id);
-      if (!phone || phone.holdTimer) return;
-      phone.holdTimer = setTimeout(function () {
-        phone.holdTimer = null;
-        if (lastPhoneIds[id]) return;
-        // Drop live tracks only. Keep remembered id/label so the cut list
-        // row does not vanish while the phone reconnects.
-        dropPhone(id);
-        publishImmediate();
-      }, 12000);
+      dropPhone(id);
     });
-    publish();
+    publishImmediate();
   }
 
   Object.defineProperty(api, 'onStatus', {
@@ -256,8 +238,8 @@
   }
 
   function paintSource(phone, source) {
-    const width = source.displayWidth || source.width;
-    const height = source.displayHeight || source.height;
+    const width = source.displayWidth || source.videoWidth || source.width;
+    const height = source.displayHeight || source.videoHeight || source.height;
     if (!width || !height) return;
     if (phone.canvas.width !== width || phone.canvas.height !== height) {
       phone.canvas.width = width;
@@ -285,10 +267,20 @@
 
   function askKey(id) {
     const now = Date.now();
-    if (now - lastAsk < 200) return;
+    if (now - lastAsk < 700) return;
     lastAsk = now;
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'need-key', id: id || '' }));
   }
+
+  api.requestAudio = function (id) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'want-audio', id: id || '' }));
+  };
+
+  api.stopAudio = function (id) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'stop-audio', id: id || '' }));
+  };
 
   api.sendTeleprompter = function (payload) {
     if (!ws || ws.readyState !== 1) return;
@@ -337,6 +329,7 @@
   function applyConfig(msg) {
     if (!msg || !msg.codec || !msg.id) return;
     const phone = ensurePhone(msg.id, msg.label);
+    if (phone.mode === 'rtc') return;
     if (msg.codec === 'image/jpeg') {
       phone.mode = 'jpeg';
       phone.waitingKey = false;
@@ -374,24 +367,18 @@
       pushPhoneAudio(phone, payload);
       return;
     }
+    // Picture on this socket is the stutter. Only the direct link may paint.
+    return;
     if (kind === 3) {
       paintJpeg(phone, payload);
       return;
     }
     if (phone.mode === 'jpeg') return;
     if (!phone.decoder || phone.decoder.state !== 'configured') return;
-    if (phone.decoder.decodeQueueSize > 1) {
-      phone.waitingKey = true;
-      try {
-        phone.decoder.reset();
-      } catch (err) {
-        askKey(phone.id);
-        return;
-      }
-      askKey(phone.id);
-      return;
-    }
     if (kind === 2 && phone.waitingKey) return;
+    // Let a short queue decode. Dropping deltas here froze the picture until
+    // the next keyframe, which showed up as a hitch about once a second.
+    if (kind === 2 && phone.decoder.decodeQueueSize > 12) return;
     if (kind === 1) phone.waitingKey = false;
     try {
       phone.pts += 33333;
@@ -406,6 +393,140 @@
       phone.waitingKey = true;
       askKey(phone.id);
     }
+  }
+
+  function rtcConfig() {
+    return {
+      iceServers: stunUrl ? [{ urls: stunUrl }] : [],
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    };
+  }
+
+  function closePeer(id) {
+    const peer = peers.get(id);
+    const phone = phones.get(id);
+    if (peer && peer.pc) {
+      try {
+        peer.pc.close();
+      } catch (err) {
+        // already closed
+      }
+    }
+    peers.delete(id);
+    earlyIce.delete(id);
+    if (phone && phone.video) {
+      phone.video.srcObject = null;
+      if (phone.video.parentNode) phone.video.parentNode.removeChild(phone.video);
+      phone.video = null;
+    }
+    if (phone && phone.mode === 'rtc') phone.mode = 'video';
+  }
+
+  function paintRtcFrame() {
+    phones.forEach(function (phone) {
+      if (phone.mode !== 'rtc' || !phone.video || !phone.video.videoWidth) return;
+      paintSource(phone, phone.video);
+    });
+    requestAnimationFrame(paintRtcFrame);
+  }
+
+  function addStudioIce(msg) {
+    if (!msg || !msg.id || !msg.candidate) return;
+    const peer = peers.get(msg.id);
+    if (!peer || !peer.pc.remoteDescription) {
+      const list = earlyIce.get(msg.id) || [];
+      list.push(msg.candidate);
+      earlyIce.set(msg.id, list);
+      return;
+    }
+    peer.pc.addIceCandidate(msg.candidate).catch(function () {});
+  }
+
+  // Direct phone picture. Do not decode this as WebCodecs while mode is rtc.
+  // A video-config that arrives after the direct link is ignored on purpose.
+  function iceUfrag(sdp) {
+    const match = String(sdp || '').match(/a=ice-ufrag:(\S+)/);
+    return match ? match[1] : '';
+  }
+
+  const pendingOffers = [];
+
+  function acceptOffer(msg) {
+    if (!msg || !msg.id || !msg.sdp || typeof RTCPeerConnection === 'undefined') return;
+    if (!stunUrl) {
+      pendingOffers.push(msg);
+      return;
+    }
+    const existing = peers.get(msg.id);
+    const alive =
+      existing && existing.pc.connectionState !== 'failed' && existing.pc.connectionState !== 'closed';
+    // A repeat of the same offer grows as candidates arrive. Rebuilding the
+    // peer on that change restarts the picture about once a second.
+    const sameTry =
+      alive &&
+      ((msg.offerId && existing.offerId === msg.offerId) ||
+        (!msg.offerId && iceUfrag(existing.sdp) && iceUfrag(existing.sdp) === iceUfrag(msg.sdp)) ||
+        existing.sdp === msg.sdp);
+    if (sameTry) return;
+    const phone = ensurePhone(msg.id, msg.label);
+    closePeer(msg.id);
+    if (phone.decoder && phone.decoder.state !== 'closed') {
+      try {
+        phone.decoder.close();
+      } catch (err) {
+        // already closed
+      }
+      phone.decoder = null;
+      phone.configSig = '';
+    }
+    const video = document.createElement('video');
+    video.className = 'split-src';
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.style.opacity = '0.02';
+    document.body.appendChild(video);
+    phone.video = video;
+    const pc = new RTCPeerConnection(rtcConfig());
+    const peer = { pc: pc, sdp: msg.sdp, offerId: msg.offerId || '' };
+    peers.set(msg.id, peer);
+    pc.ontrack = function (ev) {
+      const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
+      video.srcObject = stream;
+      video.play().catch(function () {});
+      phone.mode = 'rtc';
+      phone.waitingKey = false;
+      phone.hasFrame = false;
+    };
+    pc.onicecandidate = function (ev) {
+      if (!ev.candidate || !ws || ws.readyState !== 1) return;
+      const candidate = ev.candidate.toJSON ? ev.candidate.toJSON() : {
+        candidate: ev.candidate.candidate,
+        sdpMid: ev.candidate.sdpMid,
+        sdpMLineIndex: ev.candidate.sdpMLineIndex,
+      };
+      ws.send(JSON.stringify({ type: 'rtc-ice', id: msg.id, candidate: candidate }));
+    };
+    pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
+      .then(function () {
+        const queued = earlyIce.get(msg.id) || [];
+        earlyIce.delete(msg.id);
+        queued.forEach(function (candidate) {
+          pc.addIceCandidate(candidate).catch(function () {});
+        });
+        return pc.createAnswer();
+      })
+      .then(function (answer) {
+        return pc.setLocalDescription(answer);
+      })
+      .then(function () {
+        if (!ws || ws.readyState !== 1 || !pc.localDescription) return;
+        ws.send(JSON.stringify({ type: 'rtc-answer', id: msg.id, sdp: pc.localDescription.sdp }));
+      })
+      .catch(function () {
+        closePeer(msg.id);
+      });
   }
 
   function connect() {
@@ -426,25 +547,20 @@
         }
         if (msg.type === 'phone-status') setPhoneList(msg.phones || []);
         if (msg.type === 'video-config') applyConfig(msg);
+        if (msg.type === 'rtc-offer') acceptOffer(msg);
+        if (msg.type === 'rtc-ice') addStudioIce(msg);
+        if (msg.type === 'capture' && msg.action === 'toggle') {
+          const cap = window.__reelCapture;
+          if (cap && typeof cap.toggle === 'function') cap.toggle();
+        }
         return;
       }
       onBinary(ev.data);
     };
     ws.onclose = function () {
-      // Keep local phone canvases across a brief studio-socket blip. Wiping
-      // here made "دوربین موبایل ۱" vanish from the cut-camera list every
-      // reconnect. Soft-expire only after phone-status stays empty.
-      Array.from(phones.keys()).forEach(function (id) {
-        const phone = phones.get(id);
-        if (!phone || phone.holdTimer) return;
-        phone.holdTimer = setTimeout(function () {
-          phone.holdTimer = null;
-          if (lastPhoneIds[id]) return;
-          dropPhone(id);
-          publishImmediate();
-        }, 20000);
-      });
-      publish();
+      // The bridge sends a fresh phone-status as soon as this socket returns.
+      // Do not keep a disconnected phone on screen while waiting.
+      publishImmediate();
       setTimeout(connect, 400);
     };
   }
@@ -473,6 +589,7 @@
   function renderHint() {
     const el = document.getElementById('phone-hint');
     if (!el) return;
+    el.hidden = false;
     el.classList.toggle('on', api.connected);
     el.replaceChildren();
     if (api.connected) {
@@ -480,44 +597,29 @@
       const countText = String(count).replace(/\d/g, function (digit) {
         return '۰۱۲۳۴۵۶۷۸۹'[digit];
       });
-      if (count > 1) {
-        const names = api.cameras().map(function (phone) {
-          return phone.label;
-        }).join('، ');
-        el.textContent =
-          countText +
-          ' تا گوشی وصل شد (' +
-          names +
-          '). توی چند دوربین هر کدوم تیک جدا داره و باند خودش رو می‌گیره. صفحه‌های گوشی رو باز نگه دار.';
-      } else {
-        el.textContent =
-          'گوشی وصل شد. توی چند دوربین تیک «' +
-          (api.cameras()[0] && api.cameras()[0].label) +
-          '» رو بزن و صفحه‌ی گوشی رو باز نگه دار.';
-      }
-      return;
+      const status = document.createElement('span');
+      status.textContent = count > 1 ? countText + ' گوشی وصل است.' : 'گوشی وصل است.';
+      el.appendChild(status);
+      el.appendChild(document.createElement('br'));
     }
     if (!linkUrl) {
-      el.textContent = linkKnown
-        ? 'برای دوربین گوشی، لپ‌تاپ رو به وای‌فای وصل کن. آدرس همین‌جا میاد.'
-        : 'آدرس گوشی داره آماده می‌شه.';
+      const wait = document.createElement('span');
+      wait.textContent = linkKnown
+        ? 'لپ‌تاپ رو به وای‌فای وصل کن تا آدرس بیاد.'
+        : 'آدرس شبکه داره آماده می‌شه.';
+      el.appendChild(wait);
       return;
     }
-    const lead = document.createElement('span');
-    lead.textContent = 'برای فیلم از گوشی، هر دو رو به یه وای‌فای وصل کن و این آدرس رو توی کروم گوشی باز کن: ';
     const url = document.createElement('span');
     url.className = 'phone-link';
     url.textContent = linkUrl;
-    const tail = document.createElement('span');
-    tail.textContent =
-      ' اگه هشدار امنیتی اومد، ادامه رو بزن و شروع رو بزن. بعدش دوربین موبایل توی لیست دوربین میاد. صدا همون میکروفون لپ‌تاپه.';
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = 'کپی آدرس';
     button.addEventListener('click', function () {
       copyText(linkUrl, button);
     });
-    el.append(lead, url, tail, document.createElement('br'), button);
+    el.append(url, document.createElement('br'), button);
   }
 
   function refreshLink() {
@@ -528,6 +630,13 @@
       .then(function (data) {
         linkKnown = true;
         linkUrl = data && data.url ? data.url : '';
+        stunUrl = data && data.stun ? data.stun : stunUrl;
+        if (stunUrl && pendingOffers.length) {
+          const queued = pendingOffers.splice(0, pendingOffers.length);
+          queued.forEach(function (msg) {
+            acceptOffer(msg);
+          });
+        }
         renderHint();
       })
       .catch(function () {
@@ -538,6 +647,7 @@
 
   connect();
   refreshLink();
+  requestAnimationFrame(paintRtcFrame);
   setInterval(refreshLink, 5000);
   renderHint();
 })();

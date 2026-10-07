@@ -190,6 +190,21 @@ button {
   border: 1px solid #2a2e35;
 }
 
+#tp-record {
+  background: #ffc46b;
+  color: #14161a;
+  border: 0;
+}
+
+#tp-record.on {
+  background: #c4473a;
+  color: #fff;
+}
+
+#tp-record:disabled {
+  opacity: 0.55;
+}
+
 .tp-speed {
   min-width: 1.5em;
   text-align: center;

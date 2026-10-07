@@ -9,6 +9,11 @@
   const statusEl = document.getElementById('edit-status');
   const frame = document.getElementById('edit-frame');
   const video = document.getElementById('player');
+  const mix = document.getElementById('mix-view');
+  const addLineBtn = document.getElementById('tl-add-line');
+  const deleteLineBtn = document.getElementById('tl-delete-line');
+  const attachInput = document.getElementById('tl-attach-file');
+  const capLayer = document.getElementById('cap-layer');
   const caption = document.getElementById('caption');
   const playBtn = document.getElementById('play-btn');
   const timeEl = document.getElementById('time-readout');
@@ -77,9 +82,12 @@
   const FONT_CLASS = Object.keys(FONT_FAMILY);
 
   let clips = [];
+  let lanes = [];
   let words = [];
   let style = defaultStyle();
   let docCameras = [];
+  const laneVideos = new Map();
+  let mixClock = 0;
   let duration = 0;
   let time = 0;
   let playing = false;
@@ -204,14 +212,15 @@ function formatClock(seconds) {
   }
 
   function clipAt(t) {
-    if (!clips.length) return null;
-    for (let i = 0; i < clips.length; i++) {
-      const clip = clips[i];
-      if (t < clip.start + clip.duration - 0.001 || i === clips.length - 1) {
+    const list = clips.filter((clip) => !isAudioClip(clip));
+    if (!list.length) return null;
+    for (let i = 0; i < list.length; i++) {
+      const clip = list[i];
+      if (t < clip.start + clip.duration - 0.001 || i === list.length - 1) {
         return { clip, local: Math.max(0, Math.min(clip.duration, t - clip.start)) };
       }
     }
-    return { clip: clips[0], local: 0 };
+    return { clip: list[0], local: 0 };
   }
 
   function takeUrl(file) {
@@ -299,8 +308,10 @@ function formatClock(seconds) {
     caption.style.letterSpacing = (Number(style.letterSpacing) || 0) * scale + 'px';
     caption.style.wordSpacing = '0px';
     caption.style.lineHeight = String((style.lineHeight || 130) / 100);
-    caption.style.left = style.x + '%';
-    caption.style.top = style.y + '%';
+    if (capLayer) {
+      capLayer.style.left = style.x + '%';
+      capLayer.style.top = style.y + '%';
+    }
     caption.classList.add('is-line');
     FONT_CLASS.forEach((key) => caption.classList.remove('font-' + key));
     caption.classList.add('font-' + (style.font || 'vazir'));
@@ -341,7 +352,7 @@ function formatClock(seconds) {
     const laneNames = cameraLanes();
     const laneCount = Math.max(1, laneNames.length);
     tlInner.style.width = Math.max(tlScroll.clientWidth, duration * scale + 12) + 'px';
-    tlInner.style.height = 52 + 12 + laneCount * 56 + (laneCount - 1) * 8 + 'px';
+    tlInner.style.height = 52 + 12 + laneCount * 48 + (laneCount - 1) * 8 + 'px';
     const chips = wordLane.children;
     for (let i = 0; i < chips.length; i++) {
       const word = words[i];
@@ -354,12 +365,10 @@ function formatClock(seconds) {
     const laneNodes = videoLanes ? videoLanes.querySelectorAll('.tl-video') : [];
     laneNodes.forEach((lane) => {
       const laneKey = lane.getAttribute('data-lane') || '0';
-      const multi = Array.isArray(docCameras) && docCameras.length > 1;
       const segs = lane.children;
       let segIndex = 0;
       clips.forEach((clip, clipIndex) => {
-        if (!multi && String(clipCamera(clip)) !== String(laneKey)) return;
-        if (multi && String(clipCamera(clip)) !== '0' && String(clipCamera(clip)) !== String(laneKey)) return;
+        if (String(clip.lane || 'main') !== String(laneKey)) return;
         const seg = segs[segIndex];
         segIndex += 1;
         if (!seg) return;
@@ -416,28 +425,140 @@ function formatClock(seconds) {
     return '0';
   }
 
-  function cameraLanes() {
-    if (Array.isArray(docCameras) && docCameras.length > 1) {
-      return docCameras.map((_, index) => String(index));
+  function ensureAudioLanePresent() {
+    if (!lanes.some((lane) => lane && lane.kind === 'audio')) {
+      lanes.push({ id: 'audio', label: 'صدا', kind: 'audio', band: 0, bands: 1, file: '' });
     }
-    const names = [];
-    const seen = new Set();
-    clips.forEach((clip) => {
-      const key = String(clipCamera(clip));
-      if (seen.has(key)) return;
-      seen.add(key);
-      names.push(key);
-    });
-    if (!names.length) names.push('0');
-    return names;
+  }
+
+  function videoLaneList() {
+    ensureLaneClips();
+    return lanes.filter((lane) => lane.kind !== 'audio');
+  }
+
+  function audioLane() {
+    ensureLaneClips();
+    return lanes.find((lane) => lane.kind === 'audio') || null;
+  }
+
+  function cameraLanes() {
+    ensureLaneClips();
+    return lanes.map((lane) => lane.id);
+  }
+
+  function laneById(id) {
+    return lanes.find((lane) => lane.id === id) || null;
+  }
+
+  function isAudioLaneId(id) {
+    const lane = laneById(id);
+    return !!(lane && lane.kind === 'audio');
+  }
+
+  function isAudioClip(clip) {
+    if (!clip) return false;
+    if (clip.lane === 'audio') return true;
+    return isAudioLaneId(clip.lane);
   }
 
   function laneLabel(key) {
-    const index = Number(key);
-    if (Array.isArray(docCameras) && docCameras[index]) return docCameras[index];
-    if (key === '0' || key === '') return 'ویدیو';
-    if (Number.isFinite(index) && String(index) === String(key)) return 'دوربین ' + faNum(index + 1);
-    return String(key);
+    const lane = laneById(key);
+    if (lane && lane.label) return lane.label;
+    if (key === 'audio') return 'صدا';
+    return 'ویدیو';
+  }
+
+  function multiView() {
+    return videoLaneList().length > 1;
+  }
+
+  function ensureLaneClips() {
+    if (!lanes.length) {
+      if (Array.isArray(docCameras) && docCameras.length > 1) {
+        lanes = docCameras.map((label, index) => ({
+          id: 'cam-' + index,
+          label: label || 'دوربین ' + faNum(index + 1),
+          kind: 'band',
+          band: index,
+          bands: docCameras.length,
+          file: '',
+        }));
+      } else {
+        lanes = [{ id: 'main', label: 'ویدیو', kind: 'full', band: 0, bands: 1, file: '' }];
+      }
+    }
+    ensureAudioLanePresent();
+    const known = new Set(lanes.map((lane) => lane.id));
+    const unlabeled = clips.filter((clip) => !clip.lane || !known.has(clip.lane));
+    const labeled = clips.filter((clip) => clip.lane && known.has(clip.lane));
+    if (!unlabeled.length) return;
+    const visual = lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'file');
+    if (visual.length <= 1) {
+      const target = visual[0] || lanes.find((lane) => lane.kind !== 'audio') || lanes[0];
+      unlabeled.forEach((clip) => {
+        clip.lane = target.id;
+        if (!isAudioClip(clip)) clip.volume = 0;
+      });
+      clips = labeled.concat(unlabeled);
+      return;
+    }
+    const expanded = labeled.slice();
+    unlabeled.forEach((clip) => {
+      visual.forEach((lane) => {
+        expanded.push(Object.assign({}, clip, { lane: lane.id, camera: lane.id, volume: 0 }));
+      });
+    });
+    clips = expanded;
+  }
+
+  function bindLaneDrag(label, laneId) {
+    label.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || lanes.length < 2) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const originY = event.clientY;
+      let dragging = false;
+      function move(ev) {
+        if (Math.abs(ev.clientY - originY) < 8) return;
+        dragging = true;
+      }
+      function up(ev) {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (!dragging) {
+          const index = clips.findIndex((clip) => clip.lane === laneId);
+          if (index >= 0) pickClip(index);
+          return;
+        }
+        const nodes = Array.from(tlLabels.querySelectorAll('[data-lane]'));
+        let target = nodes.length - 1;
+        for (let i = 0; i < nodes.length; i++) {
+          const rect = nodes[i].getBoundingClientRect();
+          if (ev.clientY < rect.top + rect.height / 2) {
+            target = i;
+            break;
+          }
+        }
+        const from = lanes.findIndex((lane) => lane.id === laneId);
+        if (from < 0 || target === from) return;
+        const [item] = lanes.splice(from, 1);
+        lanes.splice(target, 0, item);
+        renderVideoLane();
+        paintMix();
+        scheduleSave();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function clipOnLane(laneId, t) {
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      if ((clip.lane || 'main') !== laneId) continue;
+      if (t >= clip.start - 0.001 && t < clip.start + clip.duration - 0.001) return clip;
+    }
+    return null;
   }
 
   function bindVideoLane(lane) {
@@ -457,8 +578,8 @@ function formatClock(seconds) {
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         if (!moved) {
-          const located = clipAt(time);
-          if (located) pickClip(clips.indexOf(located.clip));
+          const clip = clipOnLane(lane.getAttribute('data-lane') || '', time);
+          if (clip) pickClip(clips.indexOf(clip));
         }
       }
       window.addEventListener('pointermove', move);
@@ -467,32 +588,40 @@ function formatClock(seconds) {
   }
 
   function renderVideoLane() {
-    const lanes = cameraLanes();
+    const laneIds = cameraLanes();
     if (tlLabels) {
       tlLabels.replaceChildren();
       const wordLabel = document.createElement('span');
       wordLabel.textContent = 'کلمه‌ها';
       tlLabels.appendChild(wordLabel);
-      lanes.forEach((key) => {
+      laneIds.forEach((key) => {
         const label = document.createElement('span');
         label.textContent = laneLabel(key);
+        label.dataset.lane = String(key);
+        if (isAudioLaneId(key)) {
+          label.title = 'لاین صدا؛ فایل صوتی یا ویدیو را اینجا رها کن';
+          label.classList.add('tl-label-audio');
+        } else {
+          label.title = 'بکش بالا یا پایین تا جای تصویر عوض شود';
+        }
+        bindLaneDrag(label, key);
         tlLabels.appendChild(label);
       });
     }
     if (videoLanes) {
       videoLanes.replaceChildren();
-      lanes.forEach((key, laneIndex) => {
+      laneIds.forEach((key, laneIndex) => {
         const lane = document.createElement('div');
-        lane.className = 'tl-lane tl-video';
+        const audio = isAudioLaneId(key);
+        lane.className = 'tl-lane tl-video' + (audio ? ' tl-audio' : '');
         if (laneIndex === 0) lane.id = 'video-lane';
+        if (audio) lane.id = 'audio-lane';
         lane.setAttribute('data-lane', String(key));
-        lane.style.top = 64 + laneIndex * 64 + 'px';
+        lane.style.top = 64 + laneIndex * 56 + 'px';
         clips.forEach((clip, clipIndex) => {
-          const multi = Array.isArray(docCameras) && docCameras.length > 1;
-          if (!multi && String(clipCamera(clip)) !== String(key)) return;
-          if (multi && String(clipCamera(clip)) !== '0' && String(clipCamera(clip)) !== String(key)) return;
+          if (String(clip.lane || 'main') !== String(key)) return;
           const seg = document.createElement('div');
-          seg.className = 'tl-seg';
+          seg.className = 'tl-seg' + (audio ? ' tl-seg-audio' : '');
           seg.dataset.clipIndex = String(clipIndex);
           const tag = document.createElement('span');
           tag.className = 'tl-seg-tag';
@@ -500,9 +629,10 @@ function formatClock(seconds) {
           if (!tag.textContent) tag.hidden = true;
           seg.appendChild(tag);
           lane.appendChild(seg);
-          attachThumb(seg, clip);
+          if (!audio) attachThumb(seg, clip);
         });
         bindVideoLane(lane);
+        if (audio) bindAudioLaneDrop(lane);
         videoLanes.appendChild(lane);
       });
     }
@@ -510,7 +640,7 @@ function formatClock(seconds) {
   }
 
   function findClip(paragraph, start) {
-    const list = clips.filter((clip) => clip.paragraph === Number(paragraph));
+    const list = clips.filter((clip) => clip.paragraph === Number(paragraph) && !isAudioClip(clip));
     if (!list.length) return null;
     for (let i = 0; i < list.length; i++) {
       const clip = list[i];
@@ -608,7 +738,10 @@ function formatClock(seconds) {
     const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
     const srcIn = Number(clip.srcIn) > 0 ? Number(clip.srcIn) : 0;
     const srcSpan = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : duration * speed;
-    const volume = clip.volume == null || clip.volume === '' ? 1 : Number(clip.volume);
+    const lane = clip.lane ? String(clip.lane) : '';
+    const audio = lane === 'audio';
+    const fallbackVol = audio ? 1 : 0;
+    const volume = clip.volume == null || clip.volume === '' ? fallbackVol : Number(clip.volume);
     return {
       file: clip.file,
       paragraph: Number(clip.paragraph),
@@ -617,8 +750,9 @@ function formatClock(seconds) {
       srcIn,
       srcSpan,
       speed,
-      volume: Number.isFinite(volume) ? volume : 1,
+      volume: Number.isFinite(volume) ? volume : fallbackVol,
       camera: clip.camera == null || clip.camera === '' ? '0' : clip.camera,
+      lane,
     };
   }
 
@@ -632,26 +766,34 @@ function formatClock(seconds) {
       speed: clip.speed || 1,
       volume: clip.volume == null ? 1 : clip.volume,
       camera: clipCamera(clip),
+      start: clip.start || 0,
+      lane: clip.lane || '',
     }));
   }
 
   function showPicked() {
     if (picked.kind === 'clip' && clips[picked.index]) {
       const clip = clips[picked.index];
-      editLabel.textContent = 'تکه ' + faNum(picked.index + 1);
+      const audio = isAudioClip(clip);
+      editLabel.textContent = (audio ? 'صدا ' : 'تکه ') + faNum(picked.index + 1);
       clipTools.hidden = false;
       wordTools.hidden = true;
-      volumeInput.value = String(Math.round((clip.volume == null ? 1 : clip.volume) * 100));
-      volumeOut.textContent = faNum(volumeInput.value);
+      const volumeWrap = volumeInput && volumeInput.closest ? volumeInput.closest('label') : null;
+      if (volumeWrap) volumeWrap.hidden = !audio;
+      if (muteBtn) muteBtn.hidden = !audio;
+      if (audio) {
+        volumeInput.value = String(Math.round((clip.volume == null ? 1 : clip.volume) * 100));
+        volumeOut.textContent = faNum(volumeInput.value);
+        syncMuteIcon((clip.volume || 0) < 0.01);
+      }
       const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
       syncSpeedControls(speed);
-      syncMuteIcon((clip.volume || 0) < 0.01);
     } else if (picked.kind === 'word' && words[picked.index]) {
       editLabel.textContent = words[picked.index].text;
       clipTools.hidden = true;
       wordTools.hidden = false;
     } else {
-      editLabel.textContent = 'روی خط ویدیو یا یه کلمه بزن.';
+      editLabel.textContent = 'روی خط ویدیو، صدا یا یه کلمه بزن.';
       clipTools.hidden = true;
       wordTools.hidden = true;
     }
@@ -674,11 +816,12 @@ function formatClock(seconds) {
 
   function applyPlayback(clip) {
     const speed = clip.speed || 1;
-    const volume = clip.volume == null ? 1 : clip.volume;
     try {
       video.playbackRate = speed;
     } catch (err) {}
-    video.volume = Math.max(0, Math.min(1, volume));
+    // Video lanes stay silent; the audio lane drives playback volume.
+    video.muted = true;
+    video.volume = 0;
   }
 
   function sourceTimeOf(clip, local) {
@@ -706,6 +849,8 @@ function formatClock(seconds) {
       srcSpan: round3(Math.max(0.05, rightSpan)),
       speed,
       volume: clip.volume == null ? 1 : clip.volume,
+      lane: clip.lane || '',
+      camera: clip.camera,
     };
     clip.duration = round3(local);
     clip.srcSpan = round3(Math.max(0.05, leftSpan));
@@ -735,17 +880,25 @@ function formatClock(seconds) {
     const newDur = srcSpan / nextSpeed;
     const end = clip.start + oldDur;
     const delta = newDur - oldDur;
-    words.forEach((word) => {
-      if (word.start >= clip.start - 0.001 && word.start < end - 0.001) {
-        const rel = oldDur > 0 ? (word.start - clip.start) / oldDur : 0;
-        word.start = round3(clip.start + rel * newDur);
-      } else if (word.start >= end - 0.001) {
-        word.start = round3(word.start + delta);
-      }
-    });
-    clips.forEach((item) => {
-      if (item !== clip && item.start >= end - 0.001) item.start = round3(item.start + delta);
-    });
+    if (lanes.length < 2) {
+      words.forEach((word) => {
+        if (word.start >= clip.start - 0.001 && word.start < end - 0.001) {
+          const rel = oldDur > 0 ? (word.start - clip.start) / oldDur : 0;
+          word.start = round3(clip.start + rel * newDur);
+        } else if (word.start >= end - 0.001) {
+          word.start = round3(word.start + delta);
+        }
+      });
+      clips.forEach((item) => {
+        if (item !== clip && item.start >= end - 0.001) item.start = round3(item.start + delta);
+      });
+    } else {
+      clips.forEach((item) => {
+        if (item !== clip && item.lane === clip.lane && item.start >= end - 0.001) {
+          item.start = round3(item.start + delta);
+        }
+      });
+    }
     clip.speed = nextSpeed;
     clip.duration = round3(newDur);
     clip.srcSpan = round3(srcSpan);
@@ -770,12 +923,68 @@ function formatClock(seconds) {
     tag.textContent = clipTag(clip);
   }
 
+  function deleteLane() {
+    ensureLaneClips();
+    const clip = picked.kind === 'clip' ? clips[picked.index] : null;
+    const laneId = clip && clip.lane ? clip.lane : '';
+    if (!laneId) {
+      setStatus('اول یه خط را انتخاب کن');
+      return;
+    }
+    if (isAudioLaneId(laneId)) {
+      setStatus('لاین صدا را نمی‌شه حذف کرد');
+      return;
+    }
+    if (videoLaneList().length < 2) {
+      setStatus('آخرین خط ویدیو باید بمونه');
+      return;
+    }
+    const lane = laneById(laneId);
+    const name = lane && lane.label ? lane.label : 'این خط';
+    if (!window.confirm(name + ' حذف بشه؟')) return;
+    lanes = lanes.filter((item) => item.id !== laneId);
+    clips = clips.filter((item) => item.lane !== laneId);
+    ensureAudioLanePresent();
+    const vid = laneVideos.get(laneId);
+    if (vid) {
+      vid.pause();
+      vid.removeAttribute('src');
+      vid.load();
+      laneVideos.delete(laneId);
+    }
+    refreshDuration();
+    if (time >= duration) time = Math.max(0, duration - 0.05);
+    picked.kind = clips.length ? 'clip' : '';
+    picked.index = 0;
+    renderWordLane();
+    renderVideoLane();
+    showPicked();
+    syncMixMode();
+    if (clips.length) seekTo(Math.min(time, Math.max(0, duration - 0.01)), false);
+    else paintMix();
+    scheduleSave();
+  }
+
   function deleteClip(index) {
     if (clips.length < 2) {
       setStatus('حداقل یه تکه باید بمونه');
       return;
     }
     const clip = clips[index];
+    if (lanes.length > 1) {
+      if (!window.confirm('این تکه فقط از همین خط حذف بشه؟')) return;
+      clips.splice(index, 1);
+      refreshDuration();
+      if (time >= duration) time = Math.max(0, duration - 0.05);
+      picked.kind = 'clip';
+      picked.index = Math.min(index, clips.length - 1);
+      renderWordLane();
+      renderVideoLane();
+      showPicked();
+      seekTo(Math.min(time, duration - 0.01), false);
+      scheduleSave();
+      return;
+    }
     const start = clip.start;
     const end = start + clip.duration;
     const survivors = words.filter((word) => !(word.start >= start - 0.001 && word.start < end - 0.001));
@@ -892,12 +1101,200 @@ function formatClock(seconds) {
     scheduleSave();
   }
 
+  function stopMixClock() {
+    if (mixClock) cancelAnimationFrame(mixClock);
+    mixClock = 0;
+  }
+
+  function syncMixMode() {
+    const on = multiView();
+    if (mix) mix.hidden = !on;
+    video.classList.toggle('is-backed', on);
+    if (on) video.pause();
+    video.muted = true;
+  }
+
+  function laneVideo(lane, clip) {
+    let el = laneVideos.get(lane.id);
+    const audio = lane.kind === 'audio';
+    if (!el) {
+      el = document.createElement(audio ? 'audio' : 'video');
+      el.muted = !audio;
+      el.playsInline = true;
+      el.preload = 'auto';
+      laneVideos.set(lane.id, el);
+    }
+    if (el.dataset.file !== clip.file) {
+      el.dataset.file = clip.file;
+      el.src = takeUrl(clip.file);
+      el.onloadeddata = function () {
+        paintMix();
+      };
+    }
+    return el;
+  }
+
+  function drawBand(ctx, source, lane, dx, dy, dw, dh) {
+    const sw = source.videoWidth || source.width;
+    const sh = source.videoHeight || source.height;
+    if (!sw || !sh || dw < 1 || dh < 1) return;
+    let sy = 0;
+    let sww = sw;
+    let shh = sh;
+    if (lane.kind === 'band' && lane.bands > 1) {
+      const y0 = Math.round((lane.band * sh) / lane.bands);
+      const y1 = Math.round(((lane.band + 1) * sh) / lane.bands);
+      sy = y0;
+      shh = Math.max(1, y1 - y0);
+    }
+    const scale = Math.max(dw / sww, dh / shh);
+    const cw = dw / scale;
+    const ch = dh / scale;
+    ctx.drawImage(source, (sww - cw) / 2, sy + (shh - ch) / 2, cw, ch, dx, dy, dw, dh);
+  }
+
+  function paintMix() {
+    if (!mix || !multiView()) return;
+    let sw = 720;
+    let sh = 1280;
+    const visual = videoLaneList();
+    laneVideos.forEach((el) => {
+      if (el.videoWidth) {
+        sw = el.videoWidth;
+        sh = el.videoHeight || sh;
+      }
+    });
+    if (mix.width !== sw) mix.width = sw;
+    if (mix.height !== sh) mix.height = sh;
+    const ctx = mix.getContext('2d');
+    const count = Math.max(1, visual.length);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, mix.width, mix.height);
+    visual.forEach((lane, index) => {
+      const y0 = Math.round((index * mix.height) / count);
+      const y1 = Math.round(((index + 1) * mix.height) / count);
+      const clip = clipOnLane(lane.id, time);
+      if (!clip) return;
+      const el = laneVideo(lane, clip);
+      if (el.readyState < 2) return;
+      drawBand(ctx, el, lane, 0, y0, mix.width, Math.max(1, y1 - y0));
+    });
+  }
+
+  function syncLaneVideos(force) {
+    lanes.forEach((lane) => {
+      const clip = clipOnLane(lane.id, time);
+      if (!clip) {
+        const idle = laneVideos.get(lane.id);
+        if (idle) idle.pause();
+        return;
+      }
+      const vid = laneVideo(lane, clip);
+      const at = sourceTimeOf(clip, Math.max(0, time - clip.start));
+      if (force || Math.abs((vid.currentTime || 0) - at) > 0.35) {
+        try {
+          vid.currentTime = at;
+        } catch (err) {}
+      }
+      const audible = lane.kind === 'audio' && (clip.volume == null || clip.volume > 0.01);
+      vid.muted = !audible;
+      if (audible) {
+        vid.volume = Math.max(0, Math.min(1, clip.volume == null ? 1 : clip.volume));
+      } else {
+        vid.volume = 0;
+      }
+      try {
+        vid.playbackRate = clip.speed || 1;
+      } catch (err) {}
+      if (playing) vid.play().catch(() => {});
+      else vid.pause();
+    });
+  }
+
+  function syncAudioLane(force) {
+    const lane = audioLane();
+    if (!lane) return;
+    const clip = clipOnLane(lane.id, time);
+    if (!clip) {
+      const idle = laneVideos.get(lane.id);
+      if (idle) idle.pause();
+      return;
+    }
+    const el = laneVideo(lane, clip);
+    const at = sourceTimeOf(clip, Math.max(0, time - clip.start));
+    if (force || Math.abs((el.currentTime || 0) - at) > 0.35) {
+      try {
+        el.currentTime = at;
+      } catch (err) {}
+    }
+    const vol = clip.volume == null ? 1 : clip.volume;
+    el.muted = vol < 0.01;
+    el.volume = Math.max(0, Math.min(1, vol));
+    try {
+      el.playbackRate = clip.speed || 1;
+    } catch (err) {}
+    if (playing) el.play().catch(() => {});
+    else el.pause();
+  }
+
+  function pauseLaneVideos() {
+    laneVideos.forEach((el) => el.pause());
+  }
+
+  function startMixClock() {
+    stopMixClock();
+    syncLaneVideos(true);
+    let last = performance.now();
+    function frame(now) {
+      if (!playing || !multiView()) return;
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      time += dt;
+      if (time >= duration - 0.02) {
+        playing = false;
+        time = Math.max(0, duration - 0.01);
+        pauseLaneVideos();
+        paintMix();
+        renderCaption();
+        placeTimeline();
+        updateClock();
+        return;
+      }
+      syncLaneVideos(false);
+      paintMix();
+      renderCaption();
+      placeTimeline();
+      updateClock();
+      followPlayhead();
+      mixClock = requestAnimationFrame(frame);
+    }
+    mixClock = requestAnimationFrame(frame);
+  }
+
   function seekTo(t, shouldPlay) {
     if (!clips.length) return;
     time = Math.min(Math.max(0, t), Math.max(0, duration - 0.01));
     playing = !!shouldPlay;
+    if (multiView()) {
+      syncMixMode();
+      if (playing) startMixClock();
+      else {
+        stopMixClock();
+        pauseLaneVideos();
+        syncLaneVideos(true);
+        paintMix();
+      }
+      renderCaption();
+      placeTimeline();
+      if (playing) followPlayhead();
+      return;
+    }
+    syncMixMode();
     const located = clipAt(time);
-    if (!located) return;
+    if (!located) {
+      syncAudioLane(true);
+      return;
+    }
     activeIndex = clips.indexOf(located.clip);
     const token = ++loadToken;
     const same = video.dataset.file === located.clip.file && video.readyState >= 1;
@@ -911,11 +1308,13 @@ function formatClock(seconds) {
       if (Math.abs((video.currentTime || 0) - at) > 0.08) video.currentTime = at;
       if (playing) video.play().catch(() => {});
       else video.pause();
+      syncAudioLane(true);
       clockLive = true;
     }
     if (!same) {
       video.dataset.file = located.clip.file;
       video.src = takeUrl(located.clip.file);
+      video.muted = true;
       video.onloadedmetadata = () => {
         applyLocal();
         renderCaption();
@@ -933,6 +1332,9 @@ function formatClock(seconds) {
     if (playing) {
       playing = false;
       video.pause();
+      stopMixClock();
+      pauseLaneVideos();
+      syncAudioLane(false);
       updateClock();
       return;
     }
@@ -963,6 +1365,14 @@ function formatClock(seconds) {
       style,
       words,
       clips: clipPayload(),
+      lanes: lanes.map((lane) => ({
+        id: lane.id,
+        label: lane.label,
+        kind: lane.kind,
+        band: lane.band,
+        bands: lane.bands,
+        file: lane.file || '',
+      })),
     };
     try {
       const res = await fetch('/api/captions?slug=' + encodeURIComponent(slug), {
@@ -997,6 +1407,18 @@ function formatClock(seconds) {
     }));
     style = Object.assign(defaultStyle(), doc.style || {});
     docCameras = Array.isArray(doc.cameras) ? doc.cameras.slice() : [];
+    lanes = Array.isArray(doc.lanes)
+      ? doc.lanes.map((lane) => ({
+          id: String(lane.id),
+          label: lane.label || '',
+          kind: lane.kind || 'full',
+          band: Number(lane.band) || 0,
+          bands: Number(lane.bands) || 1,
+          file: lane.file || '',
+        }))
+      : [];
+    ensureLaneClips();
+    syncMixMode();
     duration = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
     titleEl.textContent = doc.title || 'زیرنویس';
     document.title = (doc.title || 'زیرنویس') + ' | Reel Studio';
@@ -1045,9 +1467,11 @@ function formatClock(seconds) {
   function rescaleToMeasured(measured) {
     let changed = false;
     const previous = clips.map((clip) => decorateClip(clip));
-    const next = [];
+    const videoPrev = previous.filter((clip) => !isAudioClip(clip));
+    const audioPrev = previous.filter((clip) => isAudioClip(clip));
+    const nextVideo = [];
     let cursor = 0;
-    previous.forEach((clip) => {
+    videoPrev.forEach((clip) => {
       const plain = clip.srcIn < 0.001 && Math.abs(clip.speed - 1) < 0.001;
       let nextDuration = clip.duration;
       let srcSpan = clip.srcSpan;
@@ -1059,24 +1483,43 @@ function formatClock(seconds) {
           changed = true;
         }
       }
-      next.push(Object.assign({}, clip, { start: cursor, duration: nextDuration, srcSpan }));
+      nextVideo.push(Object.assign({}, clip, { start: cursor, duration: nextDuration, srcSpan }));
       cursor += nextDuration;
     });
     if (!changed) return false;
     const used = new Set();
-    next.forEach((clip, index) => {
-      const old = previous[index];
+    nextVideo.forEach((clip, index) => {
+      const old = videoPrev[index];
       const scale = old.duration > 0 ? clip.duration / old.duration : 1;
       words.forEach((word, wordIndex) => {
         if (used.has(wordIndex)) return;
         const end = old.start + old.duration;
         if (word.start < old.start - 0.001 || word.start > end + 0.001) return;
-        if (word.start >= end - 0.001 && index < next.length - 1) return;
+        if (word.start >= end - 0.001 && index < nextVideo.length - 1) return;
         used.add(wordIndex);
         word.start = round3(clip.start + (word.start - old.start) * scale);
       });
     });
-    clips = next;
+    const nextAudio = audioPrev.map((clip) => {
+      const match = nextVideo.find((item) => item.paragraph === clip.paragraph);
+      if (!match) return clip;
+      const plain = clip.srcIn < 0.001 && Math.abs(clip.speed - 1) < 0.001;
+      let nextDuration = match.duration;
+      let srcSpan = match.srcSpan;
+      if (plain) {
+        const seen = Number(measured[clip.file]);
+        if (seen > 0.05) {
+          nextDuration = Math.min(match.duration, seen);
+          srcSpan = nextDuration;
+        }
+      }
+      return Object.assign({}, clip, {
+        start: match.start,
+        duration: nextDuration,
+        srcSpan,
+      });
+    });
+    clips = nextVideo.concat(nextAudio);
     duration = cursor;
     recomputeEnds();
     return true;
@@ -1110,6 +1553,7 @@ function formatClock(seconds) {
           clips[index].srcSpan = clip.srcSpan;
           clips[index].speed = clip.speed;
           clips[index].volume = clip.volume;
+          clips[index].lane = clip.lane || clips[index].lane || '';
         });
       } else {
         clips = next;
@@ -1197,15 +1641,23 @@ async function measureDurations() {
   async function loadDoc(force) {
     setStatus(force ? 'داره زمان‌بندی رو از نو می‌چینه' : 'داره زیرنویس رو می‌خونه');
     let res = await fetch('/api/captions?slug=' + encodeURIComponent(slug));
-    if (force || res.status === 404) {
+    let data = res.ok ? await res.json().catch(() => ({})) : {};
+    const needsAudio =
+      !force &&
+      res.ok &&
+      (!Array.isArray(data.lanes) ||
+        !data.lanes.some((lane) => lane && lane.kind === 'audio') ||
+        !Array.isArray(data.clips) ||
+        !data.clips.some((clip) => clip && clip.lane === 'audio'));
+    if (force || res.status === 404 || needsAudio) {
       const durations = await measureDurations();
       res = await fetch('/api/captions/build?slug=' + encodeURIComponent(slug) + (force ? '&force=1' : ''), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify({ durations: durations || {} }),
       });
+      data = await res.json().catch(() => ({}));
     }
-    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setStatus(data.error || 'زیرنویس باز نشد');
       return;
@@ -1297,7 +1749,167 @@ async function measureDurations() {
     renderCaption();
     scheduleSave();
   });
+  function fileExt(file) {
+    const name = String((file && file.name) || '').toLowerCase();
+    const match = /\.([a-z0-9]+)$/.exec(name);
+    return match ? match[1] : '';
+  }
+
+  function isAudioFileExt(ext) {
+    return ext === 'mp3' || ext === 'wav' || ext === 'm4a' || ext === 'aac' || ext === 'ogg';
+  }
+
+  function isVideoFileExt(ext) {
+    return ext === 'mp4' || ext === 'mov' || ext === 'webm';
+  }
+
+  async function postAttach(file, ext, split) {
+    const query =
+      '/api/attach?slug=' +
+      encodeURIComponent(slug) +
+      '&ext=' +
+      encodeURIComponent(ext) +
+      (split ? '&split=1' : '');
+    const res = await fetch(query, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.file) throw new Error(data.error || 'فایل اضافه نشد');
+    return data;
+  }
+
+  function pushClip(file, laneId, start, dur, volume) {
+    clips.push({
+      file: file,
+      paragraph: clips[0] ? clips[0].paragraph : 0,
+      start: round3(start),
+      duration: round3(dur),
+      srcIn: 0,
+      srcSpan: round3(dur),
+      speed: 1,
+      volume: volume,
+      camera: laneId,
+      lane: laneId,
+    });
+  }
+
+  async function addAttachedLine(file) {
+    const ext = fileExt(file);
+    if (!isVideoFileExt(ext)) {
+      setStatus('برای خط جدید فقط mp4 یا webm یا mov');
+      return;
+    }
+    setStatus('داره ویدیو اضافه می‌شه');
+    try {
+      const data = await postAttach(file, ext, false);
+      ensureLaneClips();
+      const id = 'file-' + String(data.file).replace(/[^a-z0-9]/gi, '').slice(0, 18);
+      const label = String(file.name || 'فایل').replace(/\.[^.]+$/, '').slice(0, 40) || 'فایل';
+      lanes.push({ id: id, label: label, kind: 'file', band: 0, bands: 1, file: data.file });
+      let dur = Number(data.duration) || 0;
+      if (!(dur > 0.05)) dur = await measureFile(data.file);
+      if (!(dur > 0.05)) dur = 1;
+      pushClip(data.file, id, 0, dur, 0);
+      refreshDuration();
+      renderVideoLane();
+      syncMixMode();
+      paintMix();
+      scheduleSave();
+      setStatus('خط جدید اضافه شد');
+    } catch (err) {
+      setStatus(err.message || 'ویدیو اضافه نشد');
+    }
+  }
+
+  async function addToAudioLane(file) {
+    const ext = fileExt(file);
+    if (!isAudioFileExt(ext) && !isVideoFileExt(ext)) {
+      setStatus('برای لاین صدا mp3 یا wav یا m4a یا aac یا ogg یا mp4 یا webm یا mov');
+      return;
+    }
+    ensureLaneClips();
+    const lane = audioLane();
+    if (!lane) {
+      setStatus('لاین صدا پیدا نشد');
+      return;
+    }
+    setStatus('داره به لاین صدا اضافه می‌شه');
+    try {
+      const split = isVideoFileExt(ext);
+      const data = await postAttach(file, ext, split);
+      let audioFile = data.file;
+      let dur = Number(data.duration) || 0;
+      if (split && data.audioFile) {
+        audioFile = data.audioFile;
+        dur = Number(data.audioDuration) || dur;
+        const videoId = 'file-' + String(data.file).replace(/[^a-z0-9]/gi, '').slice(0, 18);
+        const label = String(file.name || 'ویدیو').replace(/\.[^.]+$/, '').slice(0, 40) || 'ویدیو';
+        lanes.push({ id: videoId, label: label, kind: 'file', band: 0, bands: 1, file: data.file });
+        let videoDur = Number(data.duration) || 0;
+        if (!(videoDur > 0.05)) videoDur = await measureFile(data.file);
+        if (!(videoDur > 0.05)) videoDur = 1;
+        pushClip(data.file, videoId, time, videoDur, 0);
+      } else if (split && !data.audioFile) {
+        setStatus('این ویدیو صدا ندارد');
+        return;
+      }
+      if (!(dur > 0.05)) dur = await measureFile(audioFile);
+      if (!(dur > 0.05)) dur = 1;
+      pushClip(audioFile, lane.id, time, dur, 1);
+      refreshDuration();
+      renderVideoLane();
+      syncMixMode();
+      paintMix();
+      scheduleSave();
+      setStatus(split ? 'صدا و ویدیو جدا شد' : 'به لاین صدا اضافه شد');
+    } catch (err) {
+      setStatus(err.message || 'به لاین صدا اضافه نشد');
+    }
+  }
+
+  function bindAudioLaneDrop(lane) {
+    lane.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      lane.classList.add('tl-drop-on');
+    });
+    lane.addEventListener('dragleave', () => {
+      lane.classList.remove('tl-drop-on');
+    });
+    lane.addEventListener('drop', (event) => {
+      event.preventDefault();
+      lane.classList.remove('tl-drop-on');
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) addToAudioLane(file);
+    });
+    lane.addEventListener('dblclick', () => {
+      if (!attachInput) return;
+      attachInput.accept =
+        'audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,video/mp4,video/webm,video/quicktime,.mp3,.wav,.m4a,.aac,.ogg,.mp4,.webm,.mov';
+      attachInput.dataset.target = 'audio';
+      attachInput.click();
+    });
+  }
+
   zoomInput.addEventListener('input', placeTimeline);
+  if (deleteLineBtn) deleteLineBtn.addEventListener('click', deleteLane);
+  if (addLineBtn && attachInput) {
+    addLineBtn.addEventListener('click', () => {
+      attachInput.accept = 'video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov';
+      attachInput.dataset.target = 'video';
+      attachInput.click();
+    });
+    attachInput.addEventListener('change', () => {
+      const file = attachInput.files && attachInput.files[0];
+      const target = attachInput.dataset.target || 'video';
+      attachInput.value = '';
+      attachInput.dataset.target = 'video';
+      if (!file) return;
+      if (target === 'audio') addToAudioLane(file);
+      else addAttachedLine(file);
+    });
+  }
   playBtn.addEventListener('click', togglePlay);
   rebuildBtn.addEventListener('click', () => {
     if (!window.confirm('زمان کلمه‌ها و برش ویدیو از نو چیده می‌شه. رنگ و فونت می‌مونه.')) return;
@@ -1337,18 +1949,22 @@ async function measureDurations() {
   });
 
   video.addEventListener('timeupdate', () => {
+    if (multiView()) return;
     if (!playing || !clockLive) return;
     const current = clips[activeIndex];
-    if (!current || video.dataset.file !== current.file) return;
+    if (!current || video.dataset.file !== current.file || isAudioClip(current)) return;
     const speed = current.speed || 1;
     const local = (video.currentTime - (current.srcIn || 0)) / speed;
     if (local >= current.duration - 0.04) {
-      if (activeIndex < clips.length - 1) {
-        seekTo(clips[activeIndex + 1].start + 0.02, true);
+      const videoClips = clips.filter((clip) => !isAudioClip(clip));
+      const pos = videoClips.indexOf(current);
+      if (pos >= 0 && pos < videoClips.length - 1) {
+        seekTo(videoClips[pos + 1].start + 0.02, true);
         return;
       }
       playing = false;
       video.pause();
+      pauseLaneVideos();
       time = Math.max(0, duration - 0.01);
       renderCaption();
       placeTimeline();
@@ -1356,6 +1972,7 @@ async function measureDurations() {
       return;
     }
     time = current.start + Math.max(0, local);
+    syncAudioLane(false);
     renderCaption();
     placeTimeline();
     followPlayhead();
@@ -1375,19 +1992,21 @@ async function measureDurations() {
   volumeInput.addEventListener('input', () => {
     if (picked.kind !== 'clip' || !clips[picked.index]) return;
     const clip = clips[picked.index];
+    if (!isAudioClip(clip)) return;
     clip.volume = Number(volumeInput.value) / 100;
     volumeOut.textContent = faNum(volumeInput.value);
     syncMuteIcon(clip.volume < 0.01);
-    if (activeIndex === picked.index) video.volume = Math.min(1, clip.volume);
+    syncAudioLane(false);
     refreshClipTag(picked.index);
     scheduleSave();
   });
   muteBtn.addEventListener('click', () => {
     if (picked.kind !== 'clip' || !clips[picked.index]) return;
     const clip = clips[picked.index];
+    if (!isAudioClip(clip)) return;
     clip.volume = (clip.volume || 0) < 0.01 ? 1 : 0;
     showPicked();
-    if (activeIndex === picked.index) applyPlayback(clip);
+    syncAudioLane(false);
     refreshClipTag(picked.index);
     scheduleSave();
   });
@@ -1422,31 +2041,76 @@ async function measureDurations() {
     if (picked.kind === 'word') deleteWord(picked.index);
   });
 
-  caption.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) return;
-    draggingCaption = true;
-    try {
-      caption.setPointerCapture(event.pointerId);
-    } catch (err) {}
-    function move(ev) {
-      const rect = frame.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const x = ((ev.clientX - rect.left) / rect.width) * 100;
-      const y = ((ev.clientY - rect.top) / rect.height) * 100;
-      style.x = round3(Math.min(96, Math.max(4, x)));
-      style.y = round3(Math.min(96, Math.max(4, y)));
-      renderCaption();
-    }
-    function up() {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      draggingCaption = false;
-      scheduleSave();
-    }
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    event.preventDefault();
-  });
+  function setCaptionSize(next) {
+    const size = Math.round(Math.min(120, Math.max(8, next)));
+    style.size = size;
+    sizeInput.value = String(size);
+    sizeOut.textContent = faNum(size);
+    renderCaption();
+  }
+
+  function bindCaptionHandle(handle) {
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      event.preventDefault();
+      const kind = handle.dataset.handle || '';
+      const box = capLayer.getBoundingClientRect();
+      const cx = box.left + box.width / 2;
+      const cy = box.top + box.height / 2;
+      const startSize = style.size;
+      function axisDist(ev) {
+        const dx = ev.clientX - cx;
+        const dy = ev.clientY - cy;
+        if (kind === 'e' || kind === 'w') return Math.abs(dx);
+        if (kind === 'n' || kind === 's') return Math.abs(dy);
+        return Math.hypot(dx, dy);
+      }
+      const startDist = Math.max(12, axisDist(event));
+      function move(ev) {
+        const dist = axisDist(ev);
+        setCaptionSize(startSize * (dist / startDist));
+      }
+      function up() {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        scheduleSave();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  document.querySelectorAll('.cap-handle').forEach(bindCaptionHandle);
+
+  if (capLayer) {
+    capLayer.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest && event.target.closest('.cap-handle')) return;
+      draggingCaption = true;
+      try {
+        capLayer.setPointerCapture(event.pointerId);
+      } catch (err) {}
+      function move(ev) {
+        const rect = frame.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const x = ((ev.clientX - rect.left) / rect.width) * 100;
+        const y = ((ev.clientY - rect.top) / rect.height) * 100;
+        style.x = round3(Math.min(96, Math.max(4, x)));
+        style.y = round3(Math.min(96, Math.max(4, y)));
+        renderCaption();
+      }
+      function up() {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        draggingCaption = false;
+        scheduleSave();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      event.preventDefault();
+    });
+  }
 
   document.addEventListener('keydown', (event) => {
     const tag = event.target && event.target.tagName;

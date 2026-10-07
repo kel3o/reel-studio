@@ -179,6 +179,18 @@ async function main() {
     assert.ok(status && status.connected);
     assert.ok(status.phones.length >= 2, 'expected two live phones');
 
+    async function nextType(client, type, label) {
+      for (let i = 0; i < 6; i++) {
+        const msg = JSON.parse((await withTimeout(client.next(), label + ' ' + i)).data.toString());
+        if (msg.type === type) return msg;
+      }
+      throw new Error('no ' + type + ' for ' + label);
+    }
+    const restartA = await nextType(phoneA, 'rtc-restart', 'restartA');
+    const restartB = await nextType(phoneB, 'rtc-restart', 'restartB');
+    assert.strictEqual(restartA.type, 'rtc-restart');
+    assert.strictEqual(restartB.type, 'rtc-restart');
+
     const frame = Buffer.concat([Buffer.from([3]), Buffer.alloc(8), Buffer.from('jpeg-bytes')]);
     phoneA.sendBinary(frame);
     const got = await withTimeout(studio.next(), 'frame');

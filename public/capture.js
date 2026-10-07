@@ -6,7 +6,10 @@
     current: 0,
     phase: 'idle', // idle | ready | countdown | recording | review | done
     mediaRecorder: null,
+    audioRecorder: null,
     chunks: [],
+    audioChunks: [],
+    pendingAudioFile: null,
   };
   window.__reelCapture = state;
 
@@ -97,6 +100,11 @@
         html: currentParagraphHtml(),
         index: state.current,
         total: state.paragraphs.length,
+        speed: speed,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        scrollPos: scrollPos,
+        phase: state.phase,
       },
       extra || {}
     );
@@ -198,12 +206,14 @@
   function setSpeed(v) {
     speed = Math.max(1, Math.min(12, v));
     speedReadout.textContent = faNum(speed);
+    pushTeleprompter();
   }
 
   function setFontSize(v) {
     fontSize = Math.max(24, Math.min(90, v));
     panel.style.setProperty('--tp-size', fontSize + 'px');
     if (sizeReadout) sizeReadout.textContent = faNum(fontSize);
+    pushTeleprompter();
   }
 
   function setLineHeight(v) {
@@ -211,6 +221,7 @@
     panel.style.setProperty('--tp-lead', String(lineHeight));
     if (leadInput) leadInput.value = String(Math.round(lineHeight * 100));
     if (leadReadout) leadReadout.textContent = faNum(lineHeight.toFixed(2)).replace('.', '٫');
+    pushTeleprompter();
   }
 
   function renderTeleprompter() {
@@ -254,10 +265,37 @@
     return '';
   }
 
+  function pickAudioMimeType() {
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'video/webm;codecs=opus', 'video/webm'];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return '';
+  }
+
+  function waitRecorderStop(recorder) {
+    if (!recorder || recorder.state === 'inactive') return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        recorder.removeEventListener('stop', done);
+        resolve();
+      };
+      recorder.addEventListener('stop', done);
+      try {
+        if (recorder.state === 'recording') recorder.stop();
+        else resolve();
+      } catch (err) {
+        resolve();
+      }
+    });
+  }
+
   function startCountdown() {
     state.phase = 'countdown';
+    scrollPos = 0;
+    stage.scrollTop = 0;
     updateRecordButton();
-    pushTeleprompter({ visible: true, scrolling: false, resetScroll: true });
+    pushTeleprompter({ visible: true, scrolling: false, resetScroll: true, scrollPos: 0 });
     let n = 3;
     setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
     recordBtn.textContent = faNum(n);
@@ -318,6 +356,8 @@
     recordStartTs = performance.now();
     clockSeconds = 0;
     state.chunks = [];
+    state.audioChunks = [];
+    state.pendingAudioFile = null;
     const mimeType = pickMimeType();
     const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     recorder.ondataavailable = (e) => {
@@ -326,32 +366,64 @@
     recorder.onstop = onRecordingStopped;
     state.mediaRecorder = recorder;
     recorder.start();
+
+    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
+    state.audioRecorder = null;
+    if (audioTracks.length) {
+      const audioStream = new MediaStream(audioTracks);
+      const audioMime = pickAudioMimeType();
+      try {
+        const audioRecorder = audioMime
+          ? new MediaRecorder(audioStream, { mimeType: audioMime })
+          : new MediaRecorder(audioStream);
+        audioRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) state.audioChunks.push(e.data);
+        };
+        state.audioRecorder = audioRecorder;
+        audioRecorder.start();
+      } catch (err) {
+        state.audioRecorder = null;
+      }
+    }
     pushTeleprompter({ visible: true, scrolling: true, resetScroll: true });
   }
 
   function stopRecording() {
     if (state.mediaRecorder && state.phase === 'recording') {
+      try {
+        if (state.audioRecorder && state.audioRecorder.state === 'recording') state.audioRecorder.stop();
+      } catch (err) {}
       state.mediaRecorder.stop();
     }
   }
 
-  async function uploadClip(blob, paragraphIndex, take) {
+  async function uploadClip(blob, paragraphIndex, take, kind) {
     const nn = String(paragraphIndex + 1).padStart(2, '0');
-    const res = await fetch(
-      `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}`,
-      { method: 'POST', body: blob }
-    );
+    const query =
+      `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}` +
+      (kind === 'audio' ? '&kind=audio' : '');
+    const res = await fetch(query, { method: 'POST', body: blob });
     const data = await res.json();
     return data.file;
   }
 
   async function onRecordingStopped() {
+    await waitRecorderStop(state.audioRecorder);
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     const p = state.paragraphs[state.current];
     const take = p.takes.length + 1;
 
     const fileName = await uploadClip(blob, p.index, take);
     p.takes.push(fileName);
+    state.pendingAudioFile = null;
+    if (state.audioChunks.length) {
+      try {
+        const audioBlob = new Blob(state.audioChunks, { type: 'audio/webm' });
+        state.pendingAudioFile = await uploadClip(audioBlob, p.index, take, 'audio');
+      } catch (err) {
+        state.pendingAudioFile = null;
+      }
+    }
 
     reviewVideo.src = URL.createObjectURL(blob);
     reviewVideo.hidden = false;
@@ -375,6 +447,7 @@
         text: p.text,
         takes: p.takes,
         accepted: p.accepted,
+        acceptedAudio: p.acceptedAudio || null,
         duration: p.duration || null,
       })),
     };
@@ -418,6 +491,8 @@
     accepting = true;
     const p = state.paragraphs[state.current];
     p.accepted = p.takes[p.takes.length - 1];
+    p.acceptedAudio = state.pendingAudioFile || null;
+    state.pendingAudioFile = null;
     try {
       p.duration = await reviewDuration();
     } catch (err) {
@@ -449,6 +524,7 @@
     reviewVideo.hidden = true;
     liveCam.hidden = false;
     reviewVideo.pause();
+    state.pendingAudioFile = null;
     state.phase = 'ready';
     updateRecordButton();
     setStatus('آماده، دوباره ضبط کن');
@@ -466,15 +542,22 @@
     }
     if (state.phase === 'ready') armRecording();
   }
+  state.toggle = toggleRecording;
 
   function exitCapture() {
     if (state.phase === 'idle') return;
     if (state.phase === 'recording' || state.phase === 'countdown') {
       try {
+        if (state.audioRecorder && state.audioRecorder.state === 'recording') state.audioRecorder.stop();
+      } catch (err) {}
+      try {
         if (state.mediaRecorder && state.mediaRecorder.state === 'recording') state.mediaRecorder.stop();
       } catch (err) {}
       state.mediaRecorder = null;
+      state.audioRecorder = null;
       state.chunks = [];
+      state.audioChunks = [];
+      state.pendingAudioFile = null;
     }
     if (reviewVideo) {
       try {
@@ -540,6 +623,7 @@
     restartBtn.addEventListener('click', () => {
       scrollPos = 0;
       stage.scrollTop = 0;
+      pushTeleprompter({ resetScroll: true, scrollPos: 0 });
     });
   }
   if (mirrorBtn) {
@@ -611,6 +695,10 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  setInterval(() => {
+    if (panel.hidden || state.phase !== 'recording') return;
+    pushTeleprompter();
+  }, 400);
 
   async function loadExistingSession(slug) {
     try {
@@ -641,6 +729,7 @@
         emphasisColors: p.emphasisColors || {},
         takes: prior ? prior.takes || [] : [],
         accepted: prior ? prior.accepted || null : null,
+        acceptedAudio: prior ? prior.acceptedAudio || null : null,
         duration: prior && Number(prior.duration) > 0 ? Number(prior.duration) : null,
       };
     });

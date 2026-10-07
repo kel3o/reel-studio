@@ -136,6 +136,12 @@ textarea {
   font-family: inherit;
 }
 
+/* Chrome paints rtl range thumbs on the far side until the user drags.
+   Low values stay on the left, same as after a manual change. */
+input[type='range'] {
+  direction: ltr;
+}
+
 .app {
   display: flex;
   flex: 1 0 auto;
@@ -1630,6 +1636,10 @@ body.phone-cam-live #tp-live-cam[hidden] + #tp-phone-view {
   margin-bottom: 0;
 }
 
+.help-page .back-btn-end {
+  align-self: flex-end;
+}
+
 .help-page h1 {
   margin: 0 0 8px;
   font-size: 34px;
@@ -1779,6 +1789,17 @@ html[data-theme='light'] .capture-panel.fullscreen {
   font-size: 15px;
 }
 
+.scenario-open {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.scenario-open:hover h2 {
+  color: var(--accent);
+}
+
 .archive-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1845,7 +1866,8 @@ html[data-theme='light'] .capture-panel.fullscreen {
   border-radius: 8px;
 }
 
-.edit-frame video {
+.edit-frame video,
+.mix-view {
   display: block;
   max-width: 100%;
   max-height: 52vh;
@@ -1854,19 +1876,68 @@ html[data-theme='light'] .capture-panel.fullscreen {
   background: #000;
 }
 
-.caption {
+.edit-frame video.is-backed,
+.mix-view[hidden] {
+  display: none;
+}
+
+.cap-layer {
   position: absolute;
   left: 50%;
   top: 86%;
   transform: translate(-50%, -50%);
   max-width: 92%;
+  z-index: 2;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.cap-layer:active {
+  cursor: grabbing;
+}
+
+.cap-box {
+  position: absolute;
+  inset: -7px;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.cap-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #111;
+  border-radius: 1px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.cap-handle[data-handle='nw'] { left: 0; top: 0; cursor: nwse-resize; }
+.cap-handle[data-handle='n'] { left: 50%; top: 0; cursor: ns-resize; }
+.cap-handle[data-handle='ne'] { left: 100%; top: 0; cursor: nesw-resize; }
+.cap-handle[data-handle='e'] { left: 100%; top: 50%; cursor: ew-resize; }
+.cap-handle[data-handle='se'] { left: 100%; top: 100%; cursor: nwse-resize; }
+.cap-handle[data-handle='s'] { left: 50%; top: 100%; cursor: ns-resize; }
+.cap-handle[data-handle='sw'] { left: 0; top: 100%; cursor: nesw-resize; }
+.cap-handle[data-handle='w'] { left: 0; top: 50%; cursor: ew-resize; }
+
+.caption {
+  position: relative;
   text-align: center;
   line-height: 1.45;
   cursor: grab;
   user-select: none;
   touch-action: none;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.72);
-  z-index: 2;
   white-space: normal;
 }
 
@@ -1946,6 +2017,10 @@ html[data-theme='light'] .capture-panel.fullscreen {
 
 .tl-labels span {
   height: 56px;
+}
+
+.tl-labels span[data-lane] {
+  cursor: grab;
 }
 
 .tl-toolset {
@@ -2109,12 +2184,20 @@ html[data-theme='light'] .capture-panel.fullscreen {
   border-radius: 10px;
 }
 
-.tl-tools {
+.tl-edit-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tl-edit-fixed {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-inline-start: auto;
+  flex-shrink: 0;
 }
 
 .zoom-label {
@@ -2159,6 +2242,7 @@ html[data-theme='light'] .capture-panel.fullscreen {
 .tl-scroll {
   flex: 1;
   overflow-x: auto;
+  direction: ltr;
   border-radius: 8px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2183,11 +2267,28 @@ html[data-theme='light'] .capture-panel.fullscreen {
 
 .tl-video {
   top: 64px;
-  height: 56px;
+  height: 48px;
   border-radius: 8px;
   background: var(--panel-2);
   cursor: ew-resize;
   touch-action: none;
+}
+
+.tl-audio {
+  background: color-mix(in srgb, var(--panel-2) 70%, #2f6fed 30%);
+}
+
+.tl-audio.tl-drop-on {
+  outline: 2px solid #2f6fed;
+  outline-offset: -2px;
+}
+
+.tl-seg-audio {
+  background: color-mix(in srgb, #2f6fed 35%, transparent);
+}
+
+.tl-label-audio {
+  color: #6ea0ff;
 }
 
 .tl-word {
@@ -2267,7 +2368,7 @@ html[data-theme='light'] .capture-panel.fullscreen {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 8px 14px;
   margin-bottom: 10px;
 }
 
@@ -2325,9 +2426,8 @@ html[data-theme='light'] .capture-panel.fullscreen {
     align-items: stretch;
   }
 
-  .tl-tools {
-    flex-direction: column;
-    align-items: stretch;
+  .tl-edit-fixed {
+    margin-inline-start: 0;
   }
 }
 
@@ -2389,8 +2489,44 @@ html[data-ui='xl'] {
 .set-layout {
   display: grid;
   grid-template-columns: minmax(280px, 420px) minmax(300px, 1fr);
-  gap: 36px;
-  align-items: start;
+  grid-template-rows: auto auto auto;
+  column-gap: 36px;
+  row-gap: 12px;
+  align-items: stretch;
+}
+
+.set-layout > .set-stage-col {
+  display: contents;
+}
+
+.set-layout .set-kicker {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.set-layout .settings-stage {
+  grid-column: 1;
+  grid-row: 2;
+  height: auto;
+  min-height: min(58vh, 480px);
+  align-self: stretch;
+}
+
+.set-layout .opt-hint {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.set-layout > .set-cards {
+  grid-column: 2;
+  grid-row: 2;
+  height: auto;
+  align-self: stretch;
+}
+
+.set-layout > .set-cards .set-card {
+  flex: 1 1 0;
+  justify-content: center;
 }
 
 .set-stage-col {
@@ -2571,6 +2707,11 @@ body.phone-cam-live .settings-stage .frame-canvas {
   text-decoration: underline;
 }
 
+.maker-gold {
+  color: #f5c542;
+  font-weight: 700;
+}
+
 .maker-heart {
   color: #ff2d3a;
   font-size: 1.2em;
@@ -2718,6 +2859,29 @@ body.phone-cam-live .settings-stage .frame-canvas {
   .dash-layout,
   .script-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .set-layout > .set-stage-col {
+    display: flex;
+  }
+
+  .set-layout .set-kicker,
+  .set-layout .settings-stage,
+  .set-layout .opt-hint,
+  .set-layout > .set-cards {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .set-layout .settings-stage {
+    height: min(46vh, 380px);
+    min-height: 240px;
+  }
+
+  .set-layout > .set-cards .set-card {
+    flex: none;
+    justify-content: flex-start;
   }
 
   .settings-stage,

@@ -13,6 +13,7 @@
 
   function pageKey() {
     const path = location.pathname;
+    if (path.indexOf('scenarios') !== -1) return 'scenarios';
     if (path.indexOf('archive') !== -1) return 'archive';
     if (path.indexOf('help') !== -1) return 'help';
     if (path === '/' || path.endsWith('index.html')) return 'home';
@@ -115,7 +116,8 @@
     '<p class="maker-team" dir="ltr" lang="en">Team <span class="brand-reel">Reel</span> Studio</p>' +
     '<p class="maker-line">ایده اولیه: <a href="https://www.instagram.com/erfan.digitalll/" target="_blank" rel="noopener noreferrer">عرفان</a></p>' +
     '<p class="maker-line">توسعه‌دهنده: <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>' +
-    '<p class="maker-line">طراحی شده با هوش مصنوعی / Vibe Coding</p>' +
+    '<p class="maker-line">طراحی شده با <span class="maker-gold">هوش مصنوعی</span></p>' +
+    '<p class="maker-line">با ابزار <span class="maker-gold">Cursor</span> و مدل زبانی <span class="maker-gold">Grok 4.7</span></p>' +
     '</div>';
   document.body.appendChild(modal);
   const card = modal.querySelector('.maker-card');

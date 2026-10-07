@@ -8,8 +8,7 @@
   const tpText = document.getElementById('tp-text');
   const tpChrome = document.getElementById('tp-chrome');
   const tpToggle = document.getElementById('tp-toggle');
-  const tpSlower = document.getElementById('tp-slower');
-  const tpFaster = document.getElementById('tp-faster');
+  const tpRecord = document.getElementById('tp-record');
   const tpSpeedEl = document.getElementById('tp-speed');
 
   const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
@@ -32,41 +31,35 @@
   let scratchCtx = null;
   let phoneId = '';
   let phoneLabel = '';
+  let audioWanted = false;
   let audioCtx = null;
   let audioNode = null;
   let audioSource = null;
+  let audioStream = null;
 
   let tpWanted = false;
   let tpUserOn = true;
   let tpScrolling = false;
   let tpSpeed = 3;
-  let tpScrollPos = 0;
-  let tpLastTs = 0;
-
-  try {
-    const saved = Number(localStorage.getItem('reel.phoneTpSpeed'));
-    if (saved >= 1 && saved <= 12) tpSpeed = saved;
-  } catch (err) {
-    // localStorage may be blocked
-  }
-
-  function setTpSpeed(v) {
-    tpSpeed = Math.max(1, Math.min(12, v));
-    tpSpeedEl.textContent = faNum(tpSpeed);
-    try {
-      localStorage.setItem('reel.phoneTpSpeed', String(tpSpeed));
-    } catch (err) {
-      // ignore
-    }
-  }
+  let tpFont = 46;
+  let tpLead = 1.75;
+  let tpHtml = '';
+  let tpPhase = '';
+  let tpBasePos = 0;
+  let tpBaseAt = 0;
 
   function renderTpUi() {
     const show = tpWanted && tpUserOn;
     tpLayer.hidden = !show;
-    tpChrome.hidden = !show;
+    tpChrome.hidden = !tpWanted;
     tpToggle.hidden = !tpWanted;
     tpToggle.classList.toggle('on', tpUserOn);
     tpToggle.textContent = tpUserOn ? 'پنهان' : 'متن';
+    if (!tpRecord) return;
+    const recording = tpPhase === 'recording';
+    tpRecord.textContent = recording ? 'توقف' : 'ضبط';
+    tpRecord.classList.toggle('on', recording);
+    tpRecord.disabled = tpPhase === 'countdown' || tpPhase === 'review' || tpPhase === 'done';
   }
 
   function markPhoneLine() {
@@ -97,12 +90,30 @@
 
   function applyTeleprompter(msg) {
     if (!msg || msg.type !== 'teleprompter') return;
-    if (typeof msg.html === 'string') {
+    if (typeof msg.html === 'string' && msg.html !== tpHtml) {
+      tpHtml = msg.html;
       tpText.innerHTML = msg.html;
     }
-    if (msg.resetScroll) {
-      tpScrollPos = 0;
-      tpText.style.transform = 'translateY(0px)';
+    if (typeof msg.speed === 'number' && msg.speed > 0) {
+      tpSpeed = Math.max(1, Math.min(12, msg.speed));
+      tpSpeedEl.textContent = faNum(tpSpeed);
+    }
+    if (typeof msg.fontSize === 'number' && msg.fontSize > 0) {
+      tpFont = Math.max(24, Math.min(90, msg.fontSize));
+    }
+    if (typeof msg.lineHeight === 'number' && msg.lineHeight > 0) {
+      tpLead = Math.max(1.2, Math.min(2.8, msg.lineHeight));
+    }
+    tpText.style.fontSize = tpFont + 'px';
+    tpText.style.lineHeight = String(tpLead);
+    tpText.style.paddingTop = 'calc(26vh + ' + 2 * tpFont * tpLead + 'px)';
+    if (typeof msg.phase === 'string') tpPhase = msg.phase;
+    if (typeof msg.scrollPos === 'number') {
+      tpBasePos = msg.scrollPos;
+      tpBaseAt = performance.now();
+    } else if (msg.resetScroll) {
+      tpBasePos = 0;
+      tpBaseAt = performance.now();
     }
     if (typeof msg.visible === 'boolean') tpWanted = msg.visible;
     if (typeof msg.scrolling === 'boolean') tpScrolling = msg.scrolling;
@@ -111,30 +122,29 @@
     markPhoneLine();
   }
 
-  function tpFrame(ts) {
-    if (!tpLastTs) tpLastTs = ts;
-    const dt = (ts - tpLastTs) / 1000;
-    tpLastTs = ts;
-    if (tpScrolling && tpWanted && tpSpeed > 0) {
-      tpScrollPos += tpSpeed * 11 * dt;
-      if (tpUserOn) tpText.style.transform = 'translateY(' + -tpScrollPos + 'px)';
-    }
+  function tpOffset() {
+    if (!(tpScrolling && tpWanted && tpSpeed > 0)) return tpBasePos;
+    const elapsed = (performance.now() - tpBaseAt) / 1000;
+    return tpBasePos + tpSpeed * 11 * elapsed;
+  }
+
+  function tpFrame() {
+    if (tpUserOn) tpText.style.transform = 'translateY(' + -tpOffset() + 'px)';
     if (tpWanted && tpUserOn) markPhoneLine();
     requestAnimationFrame(tpFrame);
   }
-  setTpSpeed(tpSpeed);
+  tpSpeedEl.textContent = faNum(tpSpeed);
   requestAnimationFrame(tpFrame);
 
   tpToggle.addEventListener('click', function () {
     tpUserOn = !tpUserOn;
     renderTpUi();
   });
-  tpSlower.addEventListener('click', function () {
-    setTpSpeed(tpSpeed - 1);
-  });
-  tpFaster.addEventListener('click', function () {
-    setTpSpeed(tpSpeed + 1);
-  });
+  if (tpRecord) {
+    tpRecord.addEventListener('click', function () {
+      sendJson({ type: 'capture', action: 'toggle' });
+    });
+  }
 
   function setStatus(text) {
     statusEl.textContent = phoneLabel ? phoneLabel + '، ' + text : text;
@@ -171,8 +181,9 @@
 
   function sendPacket(kind, payload, capturedAt) {
     if (!ws || ws.readyState !== 1 || !hello) return false;
-    const limit = kind === 1 ? 280000 : 80000;
-    if (ws.bufferedAmount > limit) return false;
+    // A tight limit here dropped the frames right after each keyframe and
+    // made the picture freeze for a fraction of a second, about once a second.
+    if (ws.bufferedAmount > 1500000) return false;
     const body = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
     const packet = new Uint8Array(9 + body.length);
     packet[0] = kind;
@@ -226,7 +237,18 @@
         forceKey = true;
         if (lastConfig && ws.readyState === 1) ws.send(lastConfig);
       }
+      if (msg.type === 'rtc-restart') openDirect();
+      if (msg.type === 'want-audio') {
+        audioWanted = true;
+        if (running) startAudio(session);
+      }
+      if (msg.type === 'stop-audio') {
+        audioWanted = false;
+        stopAudio();
+      }
       if (msg.type === 'teleprompter') applyTeleprompter(msg);
+      if (msg.type === 'rtc-answer') acceptRtcAnswer(msg);
+      if (msg.type === 'rtc-ice') acceptRtcIce(msg);
     };
     ws.onclose = function () {
       hello = false;
@@ -256,20 +278,46 @@
       audioCtx.close().catch(function () {});
       audioCtx = null;
     }
+    if (audioStream) {
+      audioStream.getTracks().forEach(function (track) {
+        try {
+          track.stop();
+        } catch (err) {
+          // already ended
+        }
+      });
+      audioStream = null;
+    }
   }
 
-  function startAudio(localStream, id) {
+  async function startAudio(id) {
+    if (!audioWanted || id !== session) return;
     stopAudio();
-    const track = localStream.getAudioTracks()[0];
-    if (!track) return;
     try {
+      audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      if (id !== session || !audioWanted) {
+        stopAudio();
+        return;
+      }
+      const track = audioStream.getAudioTracks()[0];
+      if (!track) {
+        stopAudio();
+        return;
+      }
       audioCtx = new AudioContext();
       audioSource = audioCtx.createMediaStreamSource(new MediaStream([track]));
       const rate = audioCtx.sampleRate || 48000;
-      audioNode = audioCtx.createScriptProcessor(2048, 1, 1);
+      audioNode = audioCtx.createScriptProcessor(4096, 1, 1);
       audioNode.onaudioprocess = function (ev) {
-        if (id !== session || !hello) return;
-        if (ws && ws.bufferedAmount > 120000) return;
+        if (id !== session || !hello || !audioWanted) return;
+        if (ws && ws.bufferedAmount > 60000) return;
         const input = ev.inputBuffer.getChannelData(0);
         const pcm = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
@@ -293,9 +341,29 @@
     }
   }
 
+  let fallbackToken = 0;
+
+  function stopFallback() {
+    fallbackToken += 1;
+    jpegMode = false;
+    if (reader) {
+      reader.cancel().catch(function () {});
+      reader = null;
+    }
+    if (encoder && encoder.state !== 'closed') {
+      try {
+        encoder.close();
+      } catch (err) {
+        // already closed
+      }
+    }
+    encoder = null;
+  }
+
   function stopMedia() {
     session += 1;
-    jpegMode = false;
+    stopFallback();
+    closeRtc();
     stopAudio();
     if (reader) {
       reader.cancel().catch(function () {});
@@ -327,24 +395,30 @@
   }
 
   async function openCamera() {
-    const video = {
-      facingMode: { ideal: facing },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      frameRate: { ideal: 30 },
-    };
-    try {
-      return await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: video,
-      });
-    } catch (err) {
-      return navigator.mediaDevices.getUserMedia({ audio: false, video: video });
+    // Video only. Phone mic starts only when the studio asks for it.
+    const attempts = [
+      {
+        facingMode: { ideal: facing },
+        width: { ideal: 1280, max: 1280 },
+        height: { ideal: 720, max: 1280 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+      {
+        facingMode: { ideal: facing },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 },
+      },
+    ];
+    let lastErr;
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: false, video: attempts[i] });
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    throw lastErr;
   }
 
   function evenFrame(frame) {
@@ -374,15 +448,15 @@
   }
 
   async function pickCodec(width, height) {
-    const candidates = ['avc1.42001f', 'vp8', 'avc1.4d001f'];
-    const accelerations = ['prefer-software', 'no-preference'];
+    const candidates = ['avc1.42001f', 'avc1.4d001f', 'vp8'];
+    const accelerations = ['prefer-hardware', 'no-preference', 'prefer-software'];
     for (let a = 0; a < accelerations.length; a++) {
       for (let i = 0; i < candidates.length; i++) {
         const config = {
           codec: candidates[i],
           width: width,
           height: height,
-          bitrate: 2500000,
+          bitrate: accelerations[a] === 'prefer-software' ? 1200000 : 2500000,
           framerate: 30,
           latencyMode: 'realtime',
           hardwareAcceleration: accelerations[a],
@@ -399,7 +473,10 @@
   }
 
   function startJpeg(localStream, id) {
+    // TCP JPEG is the one-second hitch. Never start it. SESSIONS.md, 5 October 2026.
+    return;
     if (jpegMode || id !== session) return;
+    const token = fallbackToken;
     jpegMode = true;
     if (reader) {
       reader.cancel().catch(function () {});
@@ -439,7 +516,7 @@
     let busy = false;
     let lastShot = 0;
     function tick(now) {
-      if (id !== session || !jpegMode) return;
+      if (token !== fallbackToken || id !== session || !jpegMode) return;
       requestAnimationFrame(tick);
       if (busy || now - lastShot < 50) return;
       if (ws && ws.bufferedAmount > 80000) return;
@@ -464,6 +541,9 @@
   }
 
   async function startWebCodecs(localStream, id) {
+    // TCP WebCodecs is the one-second hitch. Never start it. SESSIONS.md, 5 October 2026.
+    return;
+    const token = fallbackToken;
     if (typeof VideoEncoder === 'undefined' || typeof MediaStreamTrackProcessor === 'undefined') {
       throw new Error('no-webcodecs');
     }
@@ -471,7 +551,7 @@
     const processor = new MediaStreamTrackProcessor({ track: track });
     reader = processor.readable.getReader();
     const first = await reader.read();
-    if (id !== session) {
+    if (token !== fallbackToken || id !== session) {
       if (first.value) first.value.close();
       return;
     }
@@ -501,10 +581,11 @@
         }
         const data = new Uint8Array(chunk.byteLength);
         chunk.copyTo(data);
-        if (!sendPacket(chunk.type === 'key' ? 1 : 2, data, capturedAt)) forceKey = true;
+        const kind = chunk.type === 'key' ? 1 : 2;
+        if (!sendPacket(kind, data, capturedAt) && kind === 1) forceKey = true;
       },
       error: function () {
-        if (id !== session || jpegMode) return;
+        if (token !== fallbackToken || id !== session || jpegMode) return;
         if (reader) reader.cancel().catch(function () {});
         reader = null;
         startJpeg(localStream, id);
@@ -519,23 +600,22 @@
         startJpeg(localStream, id);
         return false;
       }
-      const key = !!forceKey;
-      const limit = key ? 280000 : 80000;
-      if ((ws && ws.bufferedAmount > limit) || encoder.encodeQueueSize > 0) {
+      // Shed only when the encoder or the socket is actually seconds behind.
+      // Dropping on a small buffer, then forcing a keyframe, was the stutter.
+      if (encoder.encodeQueueSize > 4 || (ws && ws.bufferedAmount > 1500000)) {
         fitted.close();
-        forceKey = true;
         return true;
       }
+      const key = !!forceKey;
       captureTimes.push(Date.now());
       forceKey = false;
       encoder.encode(fitted, { keyFrame: key });
       fitted.close();
       return true;
     }
-    encoder.configure(config);
     setStatus('داره فرستاده می‌شه. این صفحه رو نبند.');
     if (take(frame) === false) return;
-    while (id === session && !jpegMode) {
+    while (token === fallbackToken && id === session && !jpegMode) {
       const next = await reader.read();
       if (next.done || id !== session) {
         if (next.value) next.value.close();
@@ -543,6 +623,267 @@
       }
       if (take(next.value) === false) break;
     }
+  }
+
+  let pc = null;
+  let iceQueue = [];
+  let offerTimer = 0;
+  let rtcGen = 0;
+  let rtcReadyGen = 0;
+  let dropTimer = 0;
+  let directEver = false;
+  let directMisses = 0;
+
+  function stunUrl() {
+    const port = (Number(location.port) || 443) + 1;
+    return 'stun:' + location.hostname + ':' + port;
+  }
+
+  function sendJson(obj) {
+    if (!ws || ws.readyState !== 1 || !hello) return;
+    ws.send(JSON.stringify(obj));
+  }
+
+  function closeRtc() {
+    rtcReadyGen = 0;
+    if (dropTimer) {
+      clearTimeout(dropTimer);
+      dropTimer = 0;
+    }
+    if (offerTimer) {
+      clearInterval(offerTimer);
+      offerTimer = 0;
+    }
+    iceQueue = [];
+    if (pc) {
+      try {
+        pc.close();
+      } catch (err) {
+        // already closed
+      }
+      pc = null;
+    }
+  }
+
+  function noteRtcDrop(gen) {
+    if (gen !== rtcGen || gen !== rtcReadyGen) return;
+    if (dropTimer) return;
+    dropTimer = setTimeout(function () {
+      dropTimer = 0;
+      if (gen !== rtcGen || gen !== rtcReadyGen || !running || !stream || !pc) return;
+      const ice = pc.iceConnectionState;
+      const conn = pc.connectionState;
+      // "disconnected" on Wi-Fi comes back by itself. Tearing the link down
+      // here dropped the phone onto the TCP video path, which hitches.
+      const down = ice === 'failed' || ice === 'closed' || conn === 'failed' || conn === 'closed';
+      if (!down) return;
+      openDirect();
+    }, 800);
+  }
+
+  // The studio page asks for this whenever its socket is new: refresh, or a
+  // return from another page. The old link stays "up" on the phone otherwise,
+  // and the new page has nothing to paint.
+  function openDirect() {
+    if (!running || !stream) return Promise.resolve(false);
+    const id = session;
+    const gen = ++rtcGen;
+    stopFallback();
+    setStatus('دارم تصویر را مستقیم می‌فرستم');
+    return startRtc(stream, id, gen).then(function (ok) {
+      if (gen !== rtcGen || id !== session) return false;
+      if (ok) {
+        directEver = true;
+        directMisses = 0;
+        setStatus('داره مستقیم فرستاده می‌شه. این صفحه رو نبند.');
+        return true;
+      }
+      // WebCodecs and JPEG on the websocket are the one-second hitch.
+      // See SESSIONS.md, 5 October 2026. Never leave the direct path.
+      setTimeout(function () {
+        if (!running || id !== session || rtcGen !== gen) return;
+        openDirect();
+      }, 800);
+      return false;
+    });
+  }
+
+  function acceptRtcAnswer(msg) {
+    if (!pc || !msg || !msg.sdp || pc.remoteDescription) return;
+    pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp })
+      .then(function () {
+        const queued = iceQueue;
+        iceQueue = [];
+        queued.forEach(function (candidate) {
+          pc.addIceCandidate(candidate).catch(function () {});
+        });
+      })
+      .catch(function () {});
+  }
+
+  function acceptRtcIce(msg) {
+    if (!pc || !msg || !msg.candidate) return;
+    if (!pc.remoteDescription) {
+      iceQueue.push(msg.candidate);
+      return;
+    }
+    pc.addIceCandidate(msg.candidate).catch(function () {});
+  }
+
+  function waitHello(id) {
+    return new Promise(function (resolve) {
+      const started = Date.now();
+      const timer = setInterval(function () {
+        if (id !== session || hello || Date.now() - started > 2500) {
+          clearInterval(timer);
+          resolve(!!hello && id === session);
+        }
+      }, 40);
+    });
+  }
+
+  function tuneSender() {
+    if (!pc) return;
+    const sender = pc.getSenders().find(function (item) {
+      return item.track && item.track.kind === 'video';
+    });
+    if (!sender || !sender.getParameters) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = 4000000;
+      params.encodings[0].maxFramerate = 30;
+      params.degradationPreference = 'maintain-framerate';
+      sender.setParameters(params).catch(function () {});
+    } catch (err) {
+      // the browser kept its own bitrate
+    }
+  }
+
+  function rtcUp() {
+    if (!pc) return false;
+    const ice = pc.iceConnectionState;
+    return ice === 'connected' || ice === 'completed' || pc.connectionState === 'connected';
+  }
+
+  // Live picture goes phone browser to studio browser (UDP), not through the
+  // websocket. A big keyframe on that TCP socket freezes every later frame for
+  // a fraction of a second, about once a second. The laptop webcam never uses
+  // this socket, so only phones hitch. See SESSIONS.md, 5 October 2026.
+  // If this returns false, retry the same direct link. Do not start WebCodecs
+  // or JPEG. The phone status must say it is sending directly when this path is up.
+  function startRtc(localStream, id, gen) {
+    closeRtc();
+    if (typeof RTCPeerConnection === 'undefined') return Promise.resolve(false);
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (!videoTrack) return Promise.resolve(false);
+    try {
+      videoTrack.contentHint = 'motion';
+    } catch (err) {
+      // older browsers ignore contentHint
+    }
+    pc = new RTCPeerConnection({
+      iceServers: [{ urls: stunUrl() }],
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    });
+    pc.addTransceiver(videoTrack, {
+      direction: 'sendonly',
+      sendEncodings: [{ maxBitrate: 4000000, maxFramerate: 30 }],
+    });
+    pc.onicecandidate = function (ev) {
+      if (!ev.candidate) return;
+      const candidate = ev.candidate.toJSON ? ev.candidate.toJSON() : {
+        candidate: ev.candidate.candidate,
+        sdpMid: ev.candidate.sdpMid,
+        sdpMLineIndex: ev.candidate.sdpMLineIndex,
+      };
+      sendJson({ type: 'rtc-ice', candidate: candidate });
+    };
+    return new Promise(function (resolve) {
+      let settled = false;
+      let arm = 0;
+      let giveUp = 0;
+      function finish(ok) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(arm);
+        clearTimeout(giveUp);
+        if (ok && gen === rtcGen) rtcReadyGen = gen;
+        if (offerTimer) {
+          clearInterval(offerTimer);
+          offerTimer = 0;
+        }
+        resolve(ok && gen === rtcGen);
+      }
+      arm = setTimeout(function () {
+        if (gen !== rtcGen || !pc) return;
+        if (rtcUp()) {
+          finish(true);
+          return;
+        }
+        const ice = pc.iceConnectionState;
+        if (ice === 'checking' || ice === 'connected' || ice === 'completed') return;
+        finish(false);
+      }, 8000);
+      giveUp = setTimeout(function () {
+        if (gen !== rtcGen) return;
+        if (rtcUp()) finish(true);
+        else finish(false);
+      }, 20000);
+      pc.oniceconnectionstatechange = function () {
+        if (gen !== rtcGen || !pc) return;
+        if (rtcUp()) {
+          tuneSender();
+          finish(true);
+          return;
+        }
+        const ice = pc.iceConnectionState;
+        if (gen === rtcReadyGen && (ice === 'failed' || ice === 'closed')) {
+          noteRtcDrop(gen);
+        }
+      };
+      pc.onconnectionstatechange = function () {
+        if (gen !== rtcGen || !pc) return;
+        if (pc.connectionState === 'connected') {
+          tuneSender();
+          finish(true);
+          return;
+        }
+        if (pc.connectionState === 'failed' && !settled) {
+          finish(false);
+          return;
+        }
+        if (
+          gen === rtcReadyGen &&
+          (pc.connectionState === 'failed' || pc.connectionState === 'closed')
+        ) {
+          noteRtcDrop(gen);
+        }
+      };
+      waitHello(id).then(function (ready) {
+        if (!ready || id !== session || !pc) {
+          finish(false);
+          return;
+        }
+        pc.createOffer()
+          .then(function (offer) {
+            return pc.setLocalDescription(offer);
+          })
+          .then(function () {
+            if (gen !== rtcGen || id !== session || !pc || !pc.localDescription) return;
+            sendJson({ type: 'rtc-offer', sdp: pc.localDescription.sdp, offerId: gen });
+            offerTimer = setInterval(function () {
+              if (gen !== rtcGen || !pc || !pc.localDescription || id !== session) return;
+              if (rtcUp()) return;
+              sendJson({ type: 'rtc-offer', sdp: pc.localDescription.sdp, offerId: gen });
+            }, 1200);
+          })
+          .catch(function () {
+            finish(false);
+          });
+      });
+    });
   }
 
   async function startFacing(nextFacing) {
@@ -564,17 +905,8 @@
       flipBtn.hidden = false;
       flipBtn.textContent = facing === 'user' ? 'دوربین پشت' : 'دوربین جلو';
       document.body.classList.add('streaming');
-      startAudio(stream, id);
-      try {
-        await startWebCodecs(stream, id);
-      } catch (err) {
-        if (id !== session) return;
-        if (reader) {
-          reader.cancel().catch(function () {});
-          reader = null;
-        }
-        startJpeg(stream, id);
-      }
+      if (audioWanted) startAudio(id);
+      await openDirect();
     } catch (err) {
       if (id !== session) return;
       document.body.classList.remove('streaming');

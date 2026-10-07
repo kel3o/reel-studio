@@ -41,6 +41,7 @@ const style = clampStyle({
 });
 assert.strictEqual(style.color, '#ffffff');
 assert.strictEqual(style.size, 120);
+assert.strictEqual(clampStyle({ size: 1 }).size, 8);
 assert.strictEqual(style.font, 'vazir');
 assert.strictEqual(style.highlightOpacity, 100);
 assert.strictEqual(style.textOpacity, 100);
@@ -125,6 +126,31 @@ assert.strictEqual(split[1].volume, 0.5);
 assert.strictEqual(split[2].start, 4);
 assert.strictEqual(split[2].duration, 1);
 assert.strictEqual(split[2].speed, 2);
+
+const layered = normalizeSavedClips(baseClips, [
+  { file: '01-1.webm', paragraph: 0, start: 0, duration: 4, srcIn: 0, srcSpan: 4, speed: 1, volume: 1, lane: 'cam-0' },
+  { file: '01-1.webm', paragraph: 0, start: 0, duration: 2, srcIn: 1, srcSpan: 2, speed: 1, volume: 1, lane: 'cam-1' },
+]);
+assert.strictEqual(layered.length, 2);
+assert.strictEqual(layered[0].start, 0);
+assert.strictEqual(layered[1].start, 0);
+assert.strictEqual(layered[1].lane, 'cam-1');
+assert.strictEqual(layered[1].duration, 2);
+
+const stacked = require('../lib/captions').stackFilter(
+  [
+    { start: 0, duration: 4, srcIn: 0, srcSpan: 4, speed: 1, volume: 1, audio: true, useAudio: true, laneIndex: 0, cropBands: 2, cropBand: 0 },
+    { start: 0, duration: 4, srcIn: 0, srcSpan: 4, speed: 1, volume: 0, audio: false, useAudio: false, laneIndex: 1, cropBands: 0, cropBand: 0 },
+  ],
+  720,
+  1280,
+  2,
+  'C:\\takes\\captions.ass',
+  'C:\\fonts'
+);
+assert.ok(stacked.indexOf('overlay=') !== -1);
+assert.ok(stacked.indexOf('crop=') !== -1);
+assert.strictEqual(stacked.indexOf('\u2014'), -1);
 
 const kept = require('../lib/captions').sanitizeWords(
   [

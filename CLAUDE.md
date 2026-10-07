@@ -37,6 +37,16 @@ passes, and phases are not reordered.
 Those two device names are the defaults the picker should preselect when it
 finds them. The picker still lists everything, because hardware changes.
 
+## Phone camera stutter
+
+If phone pictures hitch about once a second and the laptop webcam does not, read the 5 October 2026 entry in `SESSIONS.md` before changing the phone video path.
+
+Live phone video must stay on the direct WebRTC path (`startRtc` in `public/phone.js`, `acceptOffer` in `public/phone-studio.js`, local STUN in `lib/phone-bridge.js`). Do not move it back onto the TCP WebSocket as WebCodecs or JPEG. That socket is signaling only, plus phone-mic audio when that mic is actually selected. The phone page should say «داره مستقیم فرستاده می‌شه». The other status line means the stuttery fallback is running.
+
+The phone list is live. A disconnected phone leaves the picker and the preview immediately. Do not hold the row for tens of seconds. The server still keeps that phone's id and label so a later connect does not rename it.
+
+If the phone rows stay in the list but their bands turn black after a dashboard refresh or a trip to another page, read the 6 October 2026 entry in `SESSIONS.md`. The phone must build a new direct link when the studio socket comes back (`rtc-restart`). Do not undo the live list or the WebRTC video path.
+
 ## Who this is for
 
 One person, on one laptop, recording one kind of video: a Persian explainer reel

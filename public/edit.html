@@ -21,6 +21,8 @@
   <nav class="site-nav" aria-label="منو">
     <a href="/" data-nav="home">داشبورد</a>
     <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/scenarios.html" data-nav="scenarios">سناریوها</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
     <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
     <span class="nav-sep" aria-hidden="true">|</span>
     <button type="button" id="maker-open">سازنده</button>
@@ -40,7 +42,20 @@
       <div class="edit-stage">
         <div class="edit-frame" id="edit-frame">
           <video id="player" playsinline></video>
-          <div id="caption" class="caption font-vazir" role="button" aria-label="جای زیرنویس"></div>
+          <canvas id="mix-view" class="mix-view" hidden></canvas>
+          <div id="cap-layer" class="cap-layer">
+            <div id="caption" class="caption font-vazir"></div>
+            <div class="cap-box" aria-hidden="true">
+              <button type="button" class="cap-handle" data-handle="nw" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="n" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="ne" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="e" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="se" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="s" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="sw" aria-label="اندازه"></button>
+              <button type="button" class="cap-handle" data-handle="w" aria-label="اندازه"></button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="edit-transport">
@@ -59,7 +74,7 @@
         <span id="cap-text-opacity-out" class="opt-readout">۱۰۰</span>
       </label>
       <label>اندازه
-        <input id="cap-size" type="range" min="20" max="120" step="1" value="48" />
+        <input id="cap-size" type="range" min="8" max="120" step="1" value="48" />
         <span id="cap-size-out" class="opt-readout">۴۸</span>
       </label>
       <label>فاصله کلمات
@@ -120,13 +135,9 @@
   </div>
 
   <section class="tl-panel">
-    <div class="tl-tools">
-      <p class="opt-hint" id="tl-hint"></p>
-      <label class="zoom-label">درشت‌نمایی
-        <input id="tl-zoom" type="range" min="1" max="8" step="0.1" value="1" />
-      </label>
-    </div>
+    <input id="tl-attach-file" type="file" accept="video/mp4,video/webm,video/quicktime,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,.mp4,.webm,.mov,.mp3,.wav,.m4a,.aac,.ogg" hidden />
     <div id="tl-editbar" class="tl-editbar">
+      <div class="tl-edit-main">
       <p id="tl-edit-label" class="opt-hint">روی خط ویدیو یا یه کلمه بزن.</p>
       <div id="tl-clip-tools" class="tl-toolset" hidden>
         <button id="tl-split" type="button" class="btn">برش</button>
@@ -158,6 +169,14 @@
         <button id="tl-add-word" type="button" class="btn btn-add">افزودن</button>
         <button id="tl-delete-word" type="button" class="btn btn-danger">حذف</button>
       </div>
+      </div>
+      <div class="tl-edit-fixed">
+        <label class="zoom-label">درشت‌نمایی
+          <input id="tl-zoom" type="range" min="1" max="8" step="0.1" value="1" />
+        </label>
+        <button id="tl-delete-line" type="button" class="btn btn-danger">حذف خط</button>
+        <button id="tl-add-line" type="button" class="btn">خط جدید</button>
+      </div>
     </div>
     <div class="tl-wrap">
       <div class="tl-labels" id="tl-labels">
@@ -177,6 +196,6 @@
   </section>
 </div>
 <script src="/shell.js"></script>
-<script src="/edit.js"></script>
+<script src="/edit.js?v=5"></script>
 </body>
 </html>

@@ -21,6 +21,8 @@
   <nav class="site-nav" aria-label="منو">
     <a href="/" data-nav="home">داشبورد</a>
     <span class="nav-sep" aria-hidden="true">|</span>
+    <a href="/scenarios.html" data-nav="scenarios">سناریوها</a>
+    <span class="nav-sep" aria-hidden="true">|</span>
     <a href="/archive.html" data-nav="archive">ضبط‌های قبل</a>
     <span class="nav-sep" aria-hidden="true">|</span>
     <button type="button" id="maker-open">سازنده</button>
@@ -35,7 +37,7 @@
     <div class="scripts-panel-head">
       <h1>سناریوها</h1>
     </div>
-    <a href="/script.html" class="manual-open">سناریوی دستی</a>
+    <a href="/script.html" class="manual-open">افزودن سناریو</a>
     <ul id="script-list" class="script-list"></ul>
   </aside>
   <main class="paragraphs-panel">
@@ -54,7 +56,6 @@
             <div id="meter-bar" class="meter-bar"></div>
           </div>
           <p id="readiness" class="readiness mic-status">وضعیت میکروفون</p>
-          <p id="phone-hint" class="phone-hint" hidden></p>
         </div>
         <div class="dash-controls">
           <div class="set-card">
@@ -85,6 +86,10 @@
               <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
             </label>
             <div id="split-picks" class="split-picks" hidden></div>
+          </div>
+          <div class="set-card">
+            <span>آدرس شبکه</span>
+            <p id="phone-hint" class="phone-hint"></p>
           </div>
         </div>
       </div>
@@ -239,9 +244,9 @@
     </section>
   </div>
 </div>
-<script src="/phone-studio.js"></script>
-<script src="/devices.js"></script>
-<script src="/capture.js"></script>
+<script src="/phone-studio.js?v=13"></script>
+<script src="/devices.js?v=11"></script>
+<script src="/capture.js?v=2"></script>
 <script src="/app.js"></script>
 <script src="/shell.js"></script>
 </body>
