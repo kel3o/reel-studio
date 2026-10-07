@@ -10,6 +10,83 @@
   const pageTitle = document.getElementById('script-page-title');
   const form = document.getElementById('manual-form');
   let emColor = 1;
+  const HISTORY_MAX = 80;
+  let undoStack = [];
+  let redoStack = [];
+  let historyLocked = false;
+  let preSnapshot = '';
+  let coalesceTimer = 0;
+  let coalescing = false;
+
+  function editorSnapshot() {
+    return JSON.stringify({
+      title: titleInput.value,
+      html: textEditor.innerHTML,
+      empty: textEditor.classList.contains('is-empty'),
+    });
+  }
+
+  function rememberEditorBaseline() {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    coalescing = false;
+    preSnapshot = editorSnapshot();
+  }
+
+  function noteEditorHistory(coalesce) {
+    if (historyLocked) return;
+    if (!preSnapshot) preSnapshot = editorSnapshot();
+    if (!(coalesce && coalescing)) {
+      undoStack.push(preSnapshot);
+      if (undoStack.length > HISTORY_MAX) undoStack.shift();
+      redoStack = [];
+    }
+    if (coalesce) {
+      coalescing = true;
+      clearTimeout(coalesceTimer);
+      coalesceTimer = setTimeout(() => {
+        preSnapshot = editorSnapshot();
+        coalesceTimer = 0;
+        coalescing = false;
+      }, 500);
+    } else {
+      clearTimeout(coalesceTimer);
+      coalesceTimer = 0;
+      coalescing = false;
+      // Caller mutates after this; baseline refreshes when they call rememberEditorBaseline.
+    }
+  }
+
+  function applyEditorSnapshot(raw) {
+    const data = JSON.parse(raw);
+    historyLocked = true;
+    titleInput.value = data.title || '';
+    textEditor.innerHTML = data.html || '';
+    textEditor.classList.toggle('is-empty', !!data.empty || !getEditorText());
+    historyLocked = false;
+  }
+
+  function undoEditor() {
+    if (!undoStack.length) return;
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    const current = editorSnapshot();
+    redoStack.push(current);
+    const prev = undoStack.pop();
+    applyEditorSnapshot(prev);
+    preSnapshot = prev;
+  }
+
+  function redoEditor() {
+    if (!redoStack.length) return;
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    const current = editorSnapshot();
+    undoStack.push(current);
+    const next = redoStack.pop();
+    applyEditorSnapshot(next);
+    preSnapshot = next;
+  }
 
   function escapeHtml(value) {
     return String(value)
@@ -138,8 +215,16 @@
     }
   }
 
+  textEditor.addEventListener('beforeinput', () => {
+    if (!historyLocked) noteEditorHistory(true);
+  });
+
   textEditor.addEventListener('input', () => {
     textEditor.classList.toggle('is-empty', !getEditorText());
+  });
+
+  titleInput.addEventListener('beforeinput', () => {
+    if (!historyLocked) noteEditorHistory(true);
   });
 
   if (colorToggle && colorBox) {
@@ -180,6 +265,7 @@
         return;
       }
       errorEl.textContent = '';
+      noteEditorHistory(false);
       const span = document.createElement('span');
       span.className = 'em-preview em-preview-' + emColor;
       try {
@@ -193,6 +279,7 @@
         errorEl.textContent = 'این تکه رو نتونستم رنگی کنم';
         return;
       }
+      rememberEditorBaseline();
       sel.removeAllRanges();
       const after = document.createRange();
       after.setStartAfter(span);
@@ -239,6 +326,31 @@
     }
   });
 
+  document.addEventListener('keydown', (event) => {
+    const mod = event.ctrlKey || event.metaKey;
+    if (!mod) return;
+    if (event.key === 's' || event.key === 'S') {
+      event.preventDefault();
+      if (!saveBtn.disabled) form.requestSubmit();
+      return;
+    }
+    if (event.key === 'z' || event.key === 'Z') {
+      event.preventDefault();
+      if (event.shiftKey) redoEditor();
+      else undoEditor();
+      return;
+    }
+    if (event.key === 'y' || event.key === 'Y') {
+      event.preventDefault();
+      redoEditor();
+    }
+  });
+
   setEditorText('');
-  loadExisting();
+  rememberEditorBaseline();
+  loadExisting().then(() => {
+    undoStack = [];
+    redoStack = [];
+    rememberEditorBaseline();
+  });
 })();

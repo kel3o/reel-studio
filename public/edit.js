@@ -62,7 +62,10 @@
   const deleteClipBtn = document.getElementById('tl-delete-clip');
   const editWordBtn = document.getElementById('tl-edit-word');
   const addWordBtn = document.getElementById('tl-add-word');
+  const addPauseBtn = document.getElementById('tl-add-pause');
   const deleteWordBtn = document.getElementById('tl-delete-word');
+  const addMenu = document.getElementById('tl-add-menu');
+  const LANE_LIMIT = 5;
 
   const SPECIAL_SPEEDS = [3, 4, 5, 10];
 
@@ -102,6 +105,14 @@
   let activeIndex = 0;
   let editingWord = false;
   const picked = { kind: '', index: -1 };
+  const HISTORY_MAX = 80;
+  let undoStack = [];
+  let redoStack = [];
+  let historyLocked = false;
+  let preSnapshot = '';
+  let coalesceKey = '';
+  let coalesceAt = 0;
+  let coalesceTimer = 0;
 
   function faNum(n) {
     return String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
@@ -180,11 +191,15 @@ function formatClock(seconds) {
     return faNum(m) + ':' + faNum(String(s).padStart(2, '0'));
   }
 
+  function spokenWordsOnly(list) {
+    return (Array.isArray(list) ? list : []).filter((word) => word && !word.pause && String(word.text || '').trim());
+  }
+
   function groupLines(list) {
     const groups = [];
     let current = [];
     let chars = 0;
-    list.forEach((word) => {
+    spokenWordsOnly(list).forEach((word) => {
       const paragraphBreak = current.length && current[0].paragraph !== word.paragraph;
       const tooLong = current.length >= LINE_MAX_WORDS || chars + word.text.length > LINE_MAX_CHARS;
       if (current.length && (paragraphBreak || tooLong)) {
@@ -200,13 +215,14 @@ function formatClock(seconds) {
   }
 
   function cueAt(t) {
-    if (!words.length) return null;
+    const spoken = spokenWordsOnly(words);
+    if (!spoken.length) return null;
     if (style.wordByWord) {
-      const word = words.find((item) => t >= item.start && t < item.end);
+      const word = spoken.find((item) => t >= item.start && t < item.end);
       if (!word) return null;
       return [{ text: word.text, hot: true }];
     }
-    const group = groupLines(words).find((items) => t >= items[0].start && t < items[items.length - 1].end);
+    const group = groupLines(spoken).find((items) => t >= items[0].start && t < items[items.length - 1].end);
     if (!group) return null;
     return group.map((word) => ({ text: word.text, hot: t >= word.start && t < word.end }));
   }
@@ -397,14 +413,16 @@ function formatClock(seconds) {
     wordLane.replaceChildren();
     words.forEach((word, index) => {
       const chip = document.createElement('div');
-      chip.className = 'tl-word';
+      const pause = !!(word.pause || !String(word.text || '').trim());
+      chip.className = 'tl-word' + (pause ? ' tl-word-pause' : '');
       chip.dir = 'rtl';
-      chip.textContent = word.text;
+      chip.textContent = pause ? '' : word.text;
+      if (pause) chip.title = 'مکث';
       chip.addEventListener('pointerdown', (event) => onWordPointerDown(event, index));
       chip.addEventListener('dblclick', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        beginEditWord(index);
+        if (!pause) beginEditWord(index);
       });
       wordLane.appendChild(chip);
     });
@@ -433,7 +451,7 @@ function formatClock(seconds) {
 
   function videoLaneList() {
     ensureLaneClips();
-    return lanes.filter((lane) => lane.kind !== 'audio');
+    return lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'text');
   }
 
   function audioLane() {
@@ -459,6 +477,15 @@ function formatClock(seconds) {
     if (!clip) return false;
     if (clip.lane === 'audio') return true;
     return isAudioLaneId(clip.lane);
+  }
+
+  function laneHasSound(lane) {
+    return !!(lane && (lane.kind === 'audio' || (lane.kind === 'file' && lane.withAudio)));
+  }
+
+  function clipHasSound(clip) {
+    if (!clip) return false;
+    return isAudioClip(clip) || laneHasSound(laneById(clip.lane));
   }
 
   function laneLabel(key) {
@@ -587,23 +614,50 @@ function formatClock(seconds) {
     });
   }
 
+  function laneKindOf(key) {
+    const lane = laneById(key);
+    if (!lane) return 'full';
+    return lane.kind || 'full';
+  }
+
+  function laneIconSvg(kind) {
+    if (kind === 'audio') {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
+    }
+    if (kind === 'text') {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 4v3h5v13h4V7h5V4H5z"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17 10.5V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3.5l4 4v-11l-4 4z"/></svg>';
+  }
+
+  function countLanesByKind(kind) {
+    if (kind === 'video') {
+      return lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'text').length;
+    }
+    return lanes.filter((lane) => lane.kind === kind).length;
+  }
+
   function renderVideoLane() {
     const laneIds = cameraLanes();
     if (tlLabels) {
       tlLabels.replaceChildren();
       const wordLabel = document.createElement('span');
-      wordLabel.textContent = 'کلمه‌ها';
+      wordLabel.className = 'tl-label-icon';
+      wordLabel.title = 'متن';
+      wordLabel.innerHTML = laneIconSvg('text');
       tlLabels.appendChild(wordLabel);
       laneIds.forEach((key) => {
+        const kind = laneKindOf(key);
         const label = document.createElement('span');
-        label.textContent = laneLabel(key);
+        label.className = 'tl-label-icon' + (kind === 'audio' ? ' tl-label-audio' : '');
         label.dataset.lane = String(key);
-        if (isAudioLaneId(key)) {
-          label.title = 'لاین صدا؛ فایل صوتی یا ویدیو را اینجا رها کن';
-          label.classList.add('tl-label-audio');
-        } else {
-          label.title = 'بکش بالا یا پایین تا جای تصویر عوض شود';
-        }
+        label.title =
+          kind === 'audio'
+            ? 'لاین صدا؛ فایل صوتی یا ویدیو را اینجا رها کن'
+            : kind === 'text'
+              ? 'لاین متن'
+              : 'بکش بالا یا پایین تا جای تصویر عوض شود';
+        label.innerHTML = laneIconSvg(kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : 'video');
         bindLaneDrag(label, key);
         tlLabels.appendChild(label);
       });
@@ -612,10 +666,12 @@ function formatClock(seconds) {
       videoLanes.replaceChildren();
       laneIds.forEach((key, laneIndex) => {
         const lane = document.createElement('div');
-        const audio = isAudioLaneId(key);
-        lane.className = 'tl-lane tl-video' + (audio ? ' tl-audio' : '');
-        if (laneIndex === 0) lane.id = 'video-lane';
-        if (audio) lane.id = 'audio-lane';
+        const kind = laneKindOf(key);
+        const audio = kind === 'audio';
+        lane.className =
+          'tl-lane tl-video' + (audio ? ' tl-audio' : '') + (kind === 'text' ? ' tl-text-lane' : '');
+        if (laneIndex === 0 && kind !== 'audio' && kind !== 'text') lane.id = 'video-lane';
+        if (audio && !document.getElementById('audio-lane')) lane.id = 'audio-lane';
         lane.setAttribute('data-lane', String(key));
         lane.style.top = 64 + laneIndex * 56 + 'px';
         clips.forEach((clip, clipIndex) => {
@@ -629,7 +685,8 @@ function formatClock(seconds) {
           if (!tag.textContent) tag.hidden = true;
           seg.appendChild(tag);
           lane.appendChild(seg);
-          if (!audio) attachThumb(seg, clip);
+          if (audio) attachWave(seg, clip);
+          else if (kind !== 'text') attachThumb(seg, clip);
         });
         bindVideoLane(lane);
         if (audio) bindAudioLaneDrop(lane);
@@ -672,9 +729,18 @@ function formatClock(seconds) {
       const clip = clips[index];
       const clipEnd = clip.start + clip.duration;
       for (let i = 0; i < list.length; i++) {
-        const next = list[i + 1];
-        list[i].end = next ? next.start : clipEnd;
-        if (list[i].end < list[i].start + 0.04) list[i].end = list[i].start + 0.04;
+        const word = list[i];
+        const minSpan = word.pause ? 0.2 : 0.04;
+        let next = list[i + 1];
+        if (next && next.start < word.start + minSpan) {
+          const push = word.start + minSpan - next.start;
+          for (let j = i + 1; j < list.length; j++) list[j].start = round3(list[j].start + push);
+          next = list[i + 1];
+        }
+        if (next) word.end = next.start;
+        else if (word.end > word.start + 0.04 && word.end < clipEnd - 0.02) word.end = word.end;
+        else word.end = clipEnd;
+        if (word.end < word.start + minSpan) word.end = word.start + minSpan;
       }
     });
   }
@@ -683,19 +749,46 @@ function formatClock(seconds) {
     duration = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
   }
 
+  function wordsOnSameClip(word) {
+    const clip = findClip(word.paragraph, word.start);
+    if (!clip) return [];
+    return words
+      .filter((item) => findClip(item.paragraph, item.start) === clip)
+      .sort((a, b) => a.start - b.start);
+  }
+
   function applyWordStart(word, proposed) {
     const clip = findClip(word.paragraph, word.start);
     if (!clip) return;
-    const same = words
-      .filter((item) => findClip(item.paragraph, item.start) === clip)
-      .sort((a, b) => a.start - b.start);
+    const same = wordsOnSameClip(word);
     const index = same.indexOf(word);
     const prev = same[index - 1];
     const next = same[index + 1];
-    const min = prev ? prev.start + 0.08 : clip.start;
-    const max = next ? next.start - 0.08 : clip.start + clip.duration - 0.08;
+    const min = prev ? prev.start + 0.04 : clip.start;
+    const max = next ? next.start - 0.04 : clip.start + clip.duration - 0.04;
     if (max < min) return;
     word.start = round3(Math.min(max, Math.max(min, proposed)));
+    recomputeEnds();
+  }
+
+  function applyWordEnd(word, proposedEnd) {
+    const clip = findClip(word.paragraph, word.start);
+    if (!clip) return;
+    const same = wordsOnSameClip(word);
+    const index = same.indexOf(word);
+    const next = same[index + 1];
+    const minEnd = word.start + 0.04;
+    const maxEnd = next
+      ? (same[index + 2] ? same[index + 2].start - 0.04 : clip.start + clip.duration - 0.04)
+      : clip.start + clip.duration;
+    const end = round3(Math.min(Math.max(proposedEnd, minEnd), Math.max(minEnd, maxEnd)));
+    if (next) {
+      // Dragging the right edge moves the next word's start so it sticks.
+      const nextMax = same[index + 2] ? same[index + 2].start - 0.04 : clip.start + clip.duration - 0.04;
+      next.start = round3(Math.min(Math.max(end, word.start + 0.04), Math.max(word.start + 0.04, nextMax)));
+    } else {
+      word.end = end;
+    }
     recomputeEnds();
   }
 
@@ -703,18 +796,29 @@ function formatClock(seconds) {
     if (event.button !== 0) return;
     if (event.target && event.target.tagName === 'INPUT') return;
     const word = words[index];
+    const chip = event.currentTarget;
+    const rect = chip.getBoundingClientRect();
+    const edge = Math.max(10, Math.min(18, rect.width * 0.22));
+    const localX = event.clientX - rect.left;
+    let mode = 'move';
+    if (localX <= edge) mode = 'left';
+    else if (localX >= rect.width - edge) mode = 'right';
     const originX = event.clientX;
     const originStart = word.start;
+    const originEnd = word.end;
     let moved = false;
     draggingWord = true;
     try {
-      event.currentTarget.setPointerCapture(event.pointerId);
+      chip.setPointerCapture(event.pointerId);
     } catch (err) {}
     function move(ev) {
       const dx = ev.clientX - originX;
-      if (Math.abs(dx) < 4) return;
+      if (Math.abs(dx) < 3) return;
       moved = true;
-      applyWordStart(word, originStart + dx / pixelsPerSecond());
+      const dt = dx / pixelsPerSecond();
+      if (mode === 'left') applyWordStart(word, originStart + dt);
+      else if (mode === 'right') applyWordEnd(word, originEnd + dt);
+      else applyWordStart(word, originStart + dt);
       placeTimeline();
       renderCaption();
     }
@@ -775,13 +879,14 @@ function formatClock(seconds) {
     if (picked.kind === 'clip' && clips[picked.index]) {
       const clip = clips[picked.index];
       const audio = isAudioClip(clip);
+      const sound = clipHasSound(clip);
       editLabel.textContent = (audio ? 'صدا ' : 'تکه ') + faNum(picked.index + 1);
       clipTools.hidden = false;
       wordTools.hidden = true;
       const volumeWrap = volumeInput && volumeInput.closest ? volumeInput.closest('label') : null;
-      if (volumeWrap) volumeWrap.hidden = !audio;
-      if (muteBtn) muteBtn.hidden = !audio;
-      if (audio) {
+      if (volumeWrap) volumeWrap.hidden = !sound;
+      if (muteBtn) muteBtn.hidden = !sound;
+      if (sound) {
         volumeInput.value = String(Math.round((clip.volume == null ? 1 : clip.volume) * 100));
         volumeOut.textContent = faNum(volumeInput.value);
         syncMuteIcon((clip.volume || 0) < 0.01);
@@ -789,13 +894,23 @@ function formatClock(seconds) {
       const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
       syncSpeedControls(speed);
     } else if (picked.kind === 'word' && words[picked.index]) {
-      editLabel.textContent = words[picked.index].text;
+      const word = words[picked.index];
+      editLabel.textContent = word.pause || !String(word.text || '').trim() ? 'مکث' : word.text;
       clipTools.hidden = true;
       wordTools.hidden = false;
+      if (editWordBtn) editWordBtn.hidden = !!(word.pause || !String(word.text || '').trim());
+      if (deleteWordBtn) deleteWordBtn.hidden = false;
     } else {
-      editLabel.textContent = 'روی خط ویدیو، صدا یا یه کلمه بزن.';
+      editLabel.textContent = words.length
+        ? 'روی خط ویدیو، صدا یا یه کلمه بزن.'
+        : 'زیرنویسی نیست. با «افزودن کلمه» سر جای خط زمان یکی بساز.';
       clipTools.hidden = true;
       wordTools.hidden = true;
+    }
+    if (!words.length) {
+      wordTools.hidden = false;
+      if (editWordBtn) editWordBtn.hidden = true;
+      if (deleteWordBtn) deleteWordBtn.hidden = true;
     }
     placeTimeline();
   }
@@ -814,14 +929,29 @@ function formatClock(seconds) {
     showPicked();
   }
 
+  function activeAudioClip() {
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i].kind !== 'audio') continue;
+      const clip = clipOnLane(lanes[i].id, time);
+      if (clip) return clip;
+    }
+    return null;
+  }
+
   function applyPlayback(clip) {
     const speed = clip.speed || 1;
     try {
       video.playbackRate = speed;
     } catch (err) {}
-    // Video lanes stay silent; the audio lane drives playback volume.
-    video.muted = true;
-    video.volume = 0;
+    const audioClip = activeAudioClip();
+    if (audioClip && (audioClip.volume == null || audioClip.volume > 0.01)) {
+      video.muted = true;
+      video.volume = 0;
+    } else {
+      // Fall back to the video file's own audio when no audio-lane clip is active.
+      video.muted = false;
+      video.volume = 1;
+    }
   }
 
   function sourceTimeOf(clip, local) {
@@ -909,7 +1039,7 @@ function formatClock(seconds) {
     renderVideoLane();
     showPicked();
     if (activeIndex === index) applyPlayback(clip);
-    scheduleSave();
+    scheduleSave('speed');
   }
 
   function refreshClipTag(index) {
@@ -931,12 +1061,14 @@ function formatClock(seconds) {
       setStatus('اول یه خط را انتخاب کن');
       return;
     }
-    if (isAudioLaneId(laneId)) {
-      setStatus('لاین صدا را نمی‌شه حذف کرد');
+    const kind = laneKindOf(laneId);
+    const bucket = kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : 'video';
+    if (bucket === 'video' && countLanesByKind('video') < 2) {
+      setStatus('آخرین خط تصویر باید بمونه');
       return;
     }
-    if (videoLaneList().length < 2) {
-      setStatus('آخرین خط ویدیو باید بمونه');
+    if (bucket !== 'video' && countLanesByKind(bucket) < 1) {
+      setStatus('این خط را نمی‌شه حذف کرد');
       return;
     }
     const lane = laneById(laneId);
@@ -1021,6 +1153,7 @@ function formatClock(seconds) {
     const word = words[index];
     const chip = wordLane.children[index];
     if (!word || !chip || editingWord) return;
+    if (word.pause) return;
     editingWord = true;
     pickWord(index);
     const input = document.createElement('input');
@@ -1037,8 +1170,13 @@ function formatClock(seconds) {
       editingWord = false;
       if (commit) {
         const text = input.value.replace(/\s+/g, ' ').trim();
-        if (text) word.text = text;
-        else setStatus('متن کلمه خالی نمی‌مونه');
+        if (text) {
+          word.text = text;
+          word.pause = false;
+        } else {
+          word.text = '';
+          word.pause = true;
+        }
       }
       renderWordLane();
       renderCaption();
@@ -1059,31 +1197,76 @@ function formatClock(seconds) {
     input.addEventListener('pointerdown', (event) => event.stopPropagation());
   }
 
-  function addWord(index) {
+  function insertTimelineWord(index, asPause) {
     const base = words[index];
     if (!base) return;
     const clip = findClip(base.paragraph, base.start);
-    if (!clip) return;
-    const next = words
-      .filter((word) => word !== base && word.paragraph === base.paragraph && word.start > base.start && word.start < clip.start + clip.duration)
-      .sort((a, b) => a.start - b.start)[0];
-    const gapEnd = next ? next.start : clip.start + clip.duration;
-    if (gapEnd - base.start < 0.16) {
-      setStatus('جا برای کلمه جدید نیست');
-      return;
+    const spanEnd = base.end > base.start + 0.04 ? base.end : clip ? clip.start + clip.duration : base.start + 0.4;
+    const span = Math.max(0.08, spanEnd - base.start);
+    const piece = asPause ? Math.min(0.45, Math.max(0.2, span * 0.4)) : Math.min(0.35, Math.max(0.12, span * 0.35));
+    let start = round3(base.start + Math.max(0.06, (span - piece) / 2));
+    if (span < piece + 0.08) {
+      const push = piece + 0.08 - span;
+      words.forEach((word) => {
+        if (word !== base && word.start > base.start + 0.001) word.start = round3(word.start + push);
+      });
+      start = round3(base.start + 0.06);
     }
-    const start = round3(Math.min(base.start + Math.max(0.12, (gapEnd - base.start) / 2), gapEnd - 0.08));
-    words.push({ text: 'کلمه', start, end: start + 0.12, paragraph: base.paragraph });
+    const item = {
+      text: asPause ? '' : 'کلمه',
+      start: start,
+      end: round3(start + piece),
+      paragraph: base.paragraph,
+      pause: !!asPause,
+    };
+    words.push(item);
     words.sort((a, b) => a.start - b.start || a.paragraph - b.paragraph);
     recomputeEnds();
-    const newIndex = words.findIndex((word) => word.text === 'کلمه' && Math.abs(word.start - start) < 0.001);
+    const newIndex = words.findIndex((word) => word.pause === !!asPause && Math.abs(word.start - item.start) < 0.05);
     renderWordLane();
     renderCaption();
     if (newIndex >= 0) {
       pickWord(newIndex);
-      beginEditWord(newIndex);
+      if (!asPause) beginEditWord(newIndex);
     }
     scheduleSave();
+  }
+
+  function insertFirstWord(asPause) {
+    const visual = clips.filter((clip) => !isAudioClip(clip));
+    if (!visual.length) return;
+    const at = Math.max(0, time);
+    const clip = visual.find((item) => at >= item.start && at < item.start + item.duration) || visual[0];
+    const start = round3(Math.max(clip.start, Math.min(at, clip.start + clip.duration - 0.4)));
+    words.push({
+      text: asPause ? '' : 'کلمه',
+      start: start,
+      end: round3(start + 0.35),
+      paragraph: clip.paragraph,
+      pause: !!asPause,
+    });
+    recomputeEnds();
+    renderWordLane();
+    renderCaption();
+    pickWord(0);
+    if (!asPause) beginEditWord(0);
+    scheduleSave();
+  }
+
+  function addWord(index) {
+    if (!words.length) {
+      insertFirstWord(false);
+      return;
+    }
+    insertTimelineWord(index, false);
+  }
+
+  function addPause(index) {
+    if (!words.length) {
+      insertFirstWord(true);
+      return;
+    }
+    insertTimelineWord(index, true);
   }
 
   function deleteWord(index) {
@@ -1111,7 +1294,6 @@ function formatClock(seconds) {
     if (mix) mix.hidden = !on;
     video.classList.toggle('is-backed', on);
     if (on) video.pause();
-    video.muted = true;
   }
 
   function laneVideo(lane, clip) {
@@ -1122,12 +1304,20 @@ function formatClock(seconds) {
       el.muted = !audio;
       el.playsInline = true;
       el.preload = 'auto';
+      el.setAttribute('playsinline', '');
+      if (audio) {
+        el.style.display = 'none';
+        document.body.appendChild(el);
+      }
       laneVideos.set(lane.id, el);
     }
     if (el.dataset.file !== clip.file) {
       el.dataset.file = clip.file;
       el.src = takeUrl(clip.file);
       el.onloadeddata = function () {
+        if (!audio && !(el.videoWidth > 0)) {
+          setStatus('این ضبط تصویر ندارد. یک بار دیگر ضبط کن.');
+        }
         paintMix();
       };
     }
@@ -1196,7 +1386,7 @@ function formatClock(seconds) {
           vid.currentTime = at;
         } catch (err) {}
       }
-      const audible = lane.kind === 'audio' && (clip.volume == null || clip.volume > 0.01);
+      const audible = laneHasSound(lane) && (clip.volume == null || clip.volume > 0.01);
       vid.muted = !audible;
       if (audible) {
         vid.volume = Math.max(0, Math.min(1, clip.volume == null ? 1 : clip.volume));
@@ -1212,29 +1402,30 @@ function formatClock(seconds) {
   }
 
   function syncAudioLane(force) {
-    const lane = audioLane();
-    if (!lane) return;
-    const clip = clipOnLane(lane.id, time);
-    if (!clip) {
-      const idle = laneVideos.get(lane.id);
-      if (idle) idle.pause();
-      return;
-    }
-    const el = laneVideo(lane, clip);
-    const at = sourceTimeOf(clip, Math.max(0, time - clip.start));
-    if (force || Math.abs((el.currentTime || 0) - at) > 0.35) {
+    lanes.forEach((lane) => {
+      if (lane.kind !== 'audio') return;
+      const clip = clipOnLane(lane.id, time);
+      if (!clip) {
+        const idle = laneVideos.get(lane.id);
+        if (idle) idle.pause();
+        return;
+      }
+      const el = laneVideo(lane, clip);
+      const at = sourceTimeOf(clip, Math.max(0, time - clip.start));
+      if (force || Math.abs((el.currentTime || 0) - at) > 0.35) {
+        try {
+          el.currentTime = at;
+        } catch (err) {}
+      }
+      const vol = clip.volume == null ? 1 : clip.volume;
+      el.muted = vol < 0.01;
+      el.volume = Math.max(0, Math.min(1, vol));
       try {
-        el.currentTime = at;
+        el.playbackRate = clip.speed || 1;
       } catch (err) {}
-    }
-    const vol = clip.volume == null ? 1 : clip.volume;
-    el.muted = vol < 0.01;
-    el.volume = Math.max(0, Math.min(1, vol));
-    try {
-      el.playbackRate = clip.speed || 1;
-    } catch (err) {}
-    if (playing) el.play().catch(() => {});
-    else el.pause();
+      if (playing) el.play().catch(() => {});
+      else el.pause();
+    });
   }
 
   function pauseLaneVideos() {
@@ -1339,6 +1530,9 @@ function formatClock(seconds) {
       return;
     }
     if (time >= duration - 0.05) time = 0;
+    playing = true;
+    // Start audio in this click. A later animation frame is blocked as autoplay.
+    syncAudioLane(true);
     seekTo(time, true);
   }
 
@@ -1348,8 +1542,145 @@ function formatClock(seconds) {
     seekTo(x / pixelsPerSecond(), playing);
   }
 
-  function scheduleSave() {
+  function snapshotState() {
+    return JSON.stringify({
+      style,
+      words,
+      clips: clipPayload(),
+      lanes: lanes.map((lane) => ({
+        id: lane.id,
+        label: lane.label,
+        kind: lane.kind,
+        band: lane.band,
+        bands: lane.bands,
+        file: lane.file || '',
+        withAudio: !!lane.withAudio,
+      })),
+      time,
+      picked: { kind: picked.kind, index: picked.index },
+    });
+  }
+
+  function rememberBaseline() {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    coalesceKey = '';
+    coalesceAt = 0;
+    preSnapshot = snapshotState();
+  }
+
+  function noteHistory(historyKey) {
+    if (!ready || historyLocked) return;
+    const current = snapshotState();
+    if (!preSnapshot) {
+      preSnapshot = current;
+      return;
+    }
+    if (preSnapshot === current) return;
+    const now = Date.now();
+    const key = historyKey || '';
+    const sameBurst = key && key === coalesceKey && now - coalesceAt < 650;
+    if (!sameBurst) {
+      undoStack.push(preSnapshot);
+      if (undoStack.length > HISTORY_MAX) undoStack.shift();
+      redoStack = [];
+      coalesceKey = key;
+      coalesceAt = now;
+    }
+    if (key) {
+      clearTimeout(coalesceTimer);
+      coalesceTimer = setTimeout(() => {
+        preSnapshot = snapshotState();
+        coalesceKey = '';
+        coalesceAt = 0;
+        coalesceTimer = 0;
+      }, 650);
+    } else {
+      clearTimeout(coalesceTimer);
+      coalesceTimer = 0;
+      coalesceKey = '';
+      coalesceAt = 0;
+      preSnapshot = current;
+    }
+  }
+
+  function applySnapshot(raw) {
+    const data = JSON.parse(raw);
+    style = Object.assign(defaultStyle(), data.style || {});
+    words = (data.words || []).map((word) => {
+      const text = word.text == null ? '' : String(word.text);
+      const pause = !!(word.pause || !text.trim());
+      return {
+        text: pause ? '' : text,
+        start: Number(word.start) || 0,
+        end: Number(word.end) || 0,
+        paragraph: Number(word.paragraph),
+        pause: pause,
+        lane: word.lane ? String(word.lane) : 'text-main',
+      };
+    });
+    clips = (data.clips || []).map(decorateClip);
+    lanes = Array.isArray(data.lanes)
+      ? data.lanes.map((lane) => ({
+          id: String(lane.id),
+          label: lane.label || '',
+          kind: lane.kind || 'full',
+          band: Number(lane.band) || 0,
+          bands: Number(lane.bands) || 1,
+          file: lane.file || '',
+          withAudio: !!lane.withAudio,
+        }))
+      : [];
+    ensureLaneClips();
+    syncMixMode();
+    duration = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
+    fillForm();
+    renderWordLane();
+    renderVideoLane();
+    renderCaption();
+    const nextTime = Number(data.time);
+    if (Number.isFinite(nextTime)) seekTo(Math.max(0, Math.min(duration, nextTime)), false);
+    else updateClock();
+    picked.kind = data.picked && data.picked.kind ? data.picked.kind : '';
+    picked.index = data.picked && Number.isFinite(data.picked.index) ? data.picked.index : -1;
+    showPicked();
+  }
+
+  function undoEdit() {
+    if (!undoStack.length || historyLocked || !ready) return;
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    coalesceKey = '';
+    const current = snapshotState();
+    redoStack.push(current);
+    const prev = undoStack.pop();
+    historyLocked = true;
+    applySnapshot(prev);
+    preSnapshot = prev;
+    historyLocked = false;
+    flushSave();
+    setStatus('برگشت');
+  }
+
+  function redoEdit() {
+    if (!redoStack.length || historyLocked || !ready) return;
+    clearTimeout(coalesceTimer);
+    coalesceTimer = 0;
+    coalesceKey = '';
+    const current = snapshotState();
+    undoStack.push(current);
+    const next = redoStack.pop();
+    historyLocked = true;
+    applySnapshot(next);
+    preSnapshot = next;
+    historyLocked = false;
+    flushSave();
+    setStatus('جلو');
+  }
+
+  function scheduleSave(historyKey) {
     if (!ready) return;
+    noteHistory(historyKey);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, 350);
   }
@@ -1372,6 +1703,7 @@ function formatClock(seconds) {
         band: lane.band,
         bands: lane.bands,
         file: lane.file || '',
+        withAudio: !!lane.withAudio,
       })),
     };
     try {
@@ -1399,12 +1731,18 @@ function formatClock(seconds) {
 
   function adopt(doc) {
     clips = (doc.clips || []).map(decorateClip);
-    words = (doc.words || []).map((word) => ({
-      text: word.text,
-      start: Number(word.start) || 0,
-      end: Number(word.end) || 0,
-      paragraph: Number(word.paragraph),
-    }));
+    words = (doc.words || []).map((word) => {
+      const text = word.text == null ? '' : String(word.text);
+      const pause = !!(word.pause || !text.trim());
+      return {
+        text: pause ? '' : text,
+        start: Number(word.start) || 0,
+        end: Number(word.end) || 0,
+        paragraph: Number(word.paragraph),
+        pause: pause,
+        lane: word.lane ? String(word.lane) : 'text-main',
+      };
+    });
     style = Object.assign(defaultStyle(), doc.style || {});
     docCameras = Array.isArray(doc.cameras) ? doc.cameras.slice() : [];
     lanes = Array.isArray(doc.lanes)
@@ -1415,6 +1753,7 @@ function formatClock(seconds) {
           band: Number(lane.band) || 0,
           bands: Number(lane.bands) || 1,
           file: lane.file || '',
+          withAudio: !!lane.withAudio,
         }))
       : [];
     ensureLaneClips();
@@ -1434,6 +1773,7 @@ function formatClock(seconds) {
       renderCaption();
       updateClock();
     }
+    showPicked();
   }
 
   function measureFile(file) {
@@ -1532,12 +1872,17 @@ function formatClock(seconds) {
       fillForm();
     }
     if (Array.isArray(data.words)) {
-      words = data.words.map((word) => ({
-        text: word.text,
-        start: Number(word.start) || 0,
-        end: Number(word.end) || 0,
-        paragraph: Number(word.paragraph),
-      }));
+      words = data.words.map((word) => {
+        const text = word.text == null ? '' : String(word.text);
+        const pause = !!(word.pause || !text.trim() || text === '·');
+        return {
+          text: pause ? '' : text,
+          start: Number(word.start) || 0,
+          end: Number(word.end) || 0,
+          paragraph: Number(word.paragraph),
+          pause: pause,
+        };
+      });
     }
     if (Array.isArray(data.clips)) {
       const next = data.clips.map(decorateClip);
@@ -1583,6 +1928,104 @@ function formatClock(seconds) {
     };
   }
 
+  const waveCache = new Map();
+
+  const WAVE_RATE = 50;
+
+  function waveFromBuffer(audioBuffer) {
+    const channel = audioBuffer.getChannelData(0);
+    const block = Math.max(1, Math.round(audioBuffer.sampleRate / WAVE_RATE));
+    const bars = Math.ceil(channel.length / block);
+    const peaks = new Array(bars);
+    for (let i = 0; i < bars; i++) {
+      let max = 0;
+      const end = Math.min(channel.length, (i + 1) * block);
+      for (let j = i * block; j < end; j += 4) {
+        const value = Math.abs(channel[j]);
+        if (value > max) max = value;
+      }
+      peaks[i] = max;
+    }
+    return { rate: WAVE_RATE, peaks };
+  }
+
+  async function loadWave(file) {
+    if (waveCache.has(file)) return waveCache.get(file);
+    const pending = (async () => {
+      const res = await fetch(
+        '/api/wave?slug=' + encodeURIComponent(slug) + '&file=' + encodeURIComponent(file)
+      );
+      const data = await res.json().catch(() => ({}));
+      let wave = null;
+      if (res.ok && Array.isArray(data.peaks) && data.peaks.length) {
+        wave = { rate: Number(data.rate) || WAVE_RATE, peaks: data.peaks };
+      } else {
+        const rawRes = await fetch(takeUrl(file));
+        const raw = await rawRes.arrayBuffer();
+        const audioCtx = new AudioContext();
+        try {
+          wave = waveFromBuffer(await audioCtx.decodeAudioData(raw));
+        } finally {
+          audioCtx.close();
+        }
+      }
+      let top = 0;
+      wave.peaks.forEach((peak) => {
+        if (peak > top) top = peak;
+      });
+      wave.top = top || 1;
+      return wave;
+    })();
+    waveCache.set(file, pending);
+    pending.catch(() => waveCache.delete(file));
+    return pending;
+  }
+
+  function paintWave(seg, wave, clip) {
+    const width = Math.max(2, Math.round(seg.clientWidth || 2));
+    const height = Math.max(8, Math.round(seg.clientHeight || 40));
+    const canvas = document.createElement('canvas');
+    canvas.className = 'tl-wave';
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    const from = clip.srcIn * wave.rate;
+    const span = Math.max(1, clip.srcSpan * wave.rate);
+    const peakAt = (x) => {
+      const a = Math.floor(from + (x / width) * span);
+      const b = Math.max(a + 1, Math.floor(from + ((x + 1) / width) * span));
+      let max = 0;
+      for (let i = a; i < b && i < wave.peaks.length; i++) {
+        if (i >= 0 && wave.peaks[i] > max) max = wave.peaks[i];
+      }
+      return Math.sqrt(Math.min(1, max / wave.top));
+    };
+    const floor = height - 1;
+    const room = height - 4;
+    ctx.beginPath();
+    ctx.moveTo(0, floor);
+    for (let x = 0; x < width; x++) ctx.lineTo(x + 0.5, floor - Math.max(1, peakAt(x) * room));
+    ctx.lineTo(width, floor);
+    ctx.closePath();
+    ctx.fillStyle = '#3ddc6a';
+    ctx.fill();
+    seg.querySelector('.tl-wave')?.remove();
+    seg.insertBefore(canvas, seg.firstChild);
+  }
+
+  async function attachWave(seg, clip) {
+    seg.style.backgroundColor = '#102418';
+    try {
+      const wave = await loadWave(clip.file);
+      if (!seg.isConnected) return;
+      requestAnimationFrame(() => {
+        if (seg.isConnected) paintWave(seg, wave, clip);
+      });
+    } catch (err) {
+      seg.title = 'موج صدا ساخته نشد';
+    }
+  }
+
   function attachThumb(seg, clip) {
     const probe = document.createElement('video');
     probe.muted = true;
@@ -1608,6 +2051,15 @@ function formatClock(seconds) {
       finish();
     };
     probe.addEventListener('loadeddata', () => {
+      if (!(probe.videoWidth > 2)) {
+        seg.classList.add('tl-seg-novideo');
+        const note = document.createElement('span');
+        note.className = 'tl-seg-tag';
+        note.textContent = 'بدون تصویر';
+        seg.appendChild(note);
+        finish();
+        return;
+      }
       const at = Math.min(0.35, Math.max(0, (probe.duration || 0.2) * 0.2));
       if (Math.abs((probe.currentTime || 0) - at) < 0.05) draw();
       else {
@@ -1645,6 +2097,7 @@ async function measureDurations() {
     const needsAudio =
       !force &&
       res.ok &&
+      !data.audioMigrated &&
       (!Array.isArray(data.lanes) ||
         !data.lanes.some((lane) => lane && lane.kind === 'audio') ||
         !Array.isArray(data.clips) ||
@@ -1680,6 +2133,9 @@ async function measureDurations() {
       seekTo(0, false);
     }
     ready = true;
+    rememberBaseline();
+    undoStack = [];
+    redoStack = [];
     if (fixed) {
       scheduleSave();
       setStatus('زمان ویدیو با زیرنویس یکی نبود. روی مدت واقعی از نو چیده شد.');
@@ -1697,27 +2153,27 @@ async function measureDurations() {
   colorInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   sizeInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   wordSpaceInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   letterSpaceInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   lineHeightInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   fontInput.addEventListener('change', () => {
     readForm();
@@ -1732,17 +2188,17 @@ async function measureDurations() {
   highlightColor.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   opacityInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   textOpacityInput.addEventListener('input', () => {
     readForm();
     renderCaption();
-    scheduleSave();
+    scheduleSave('style');
   });
   wordInput.addEventListener('change', () => {
     readForm();
@@ -1804,34 +2260,115 @@ async function measureDurations() {
     setStatus('داره ویدیو اضافه می‌شه');
     try {
       const data = await postAttach(file, ext, false);
+      let answer = 'none';
+      if (data.hasAudio) {
+        answer = await askSplit();
+        if (!answer) {
+          setStatus('ویدیو اضافه نشد');
+          return;
+        }
+      }
+      let split = null;
+      if (answer === 'yes') {
+        setStatus('داره صدای ویدیو جدا می‌شه');
+        split = await postAttachSplit(data.file);
+      }
       ensureLaneClips();
       const id = 'file-' + String(data.file).replace(/[^a-z0-9]/gi, '').slice(0, 18);
       const label = String(file.name || 'فایل').replace(/\.[^.]+$/, '').slice(0, 40) || 'فایل';
-      lanes.push({ id: id, label: label, kind: 'file', band: 0, bands: 1, file: data.file });
+      const withAudio = answer === 'no';
+      lanes.push({ id: id, label: label, kind: 'file', band: 0, bands: 1, file: data.file, withAudio: withAudio });
       let dur = Number(data.duration) || 0;
       if (!(dur > 0.05)) dur = await measureFile(data.file);
       if (!(dur > 0.05)) dur = 1;
-      pushClip(data.file, id, 0, dur, 0);
+      pushClip(data.file, id, 0, dur, withAudio ? 1 : 0);
+      if (split && split.audioFile) {
+        let audioDur = Number(split.audioDuration) || 0;
+        if (!(audioDur > 0.05)) audioDur = await measureFile(split.audioFile);
+        if (!(audioDur > 0.05)) audioDur = dur;
+        const target = freeAudioLane(0, audioDur, label);
+        pushClip(split.audioFile, target.id, 0, audioDur, 1);
+      }
       refreshDuration();
       renderVideoLane();
       syncMixMode();
       paintMix();
       scheduleSave();
-      setStatus('خط جدید اضافه شد');
+      if (answer === 'yes') setStatus('ویدیو و صداش روی دو خط جدا اومد');
+      else if (answer === 'no') setStatus('ویدیو با صداش روی یه خط اومد');
+      else setStatus('خط جدید اضافه شد');
     } catch (err) {
       setStatus(err.message || 'ویدیو اضافه نشد');
     }
   }
 
-  async function addToAudioLane(file) {
+  async function postAttachSplit(file) {
+    const res = await fetch(
+      '/api/attach-split?slug=' + encodeURIComponent(slug) + '&file=' + encodeURIComponent(file),
+      { method: 'POST' }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.audioFile) throw new Error(data.error || 'صدای ویدیو جدا نشد');
+    return data;
+  }
+
+  // An audio lane plays one clip at a time, so a split sound that would sit on
+  // top of the microphone gets its own audio lane.
+  function freeAudioLane(start, dur, label) {
+    const end = start + dur;
+    const busy = (lane) =>
+      clips.some((clip) => clip.lane === lane.id && clip.start < end - 0.02 && clip.start + clip.duration > start + 0.02);
+    const open = lanes.find((lane) => lane.kind === 'audio' && !busy(lane));
+    if (open) return open;
+    if (countLanesByKind('audio') >= LANE_LIMIT) return audioLane() || lanes.find((lane) => lane.kind === 'audio');
+    const lane = { id: 'audio-' + Date.now().toString(36), label: 'صدای ' + label, kind: 'audio', band: 0, bands: 1, file: '' };
+    lanes.push(lane);
+    return lane;
+  }
+
+  const splitAsk = document.getElementById('split-ask');
+  function askSplit() {
+    if (!splitAsk) return Promise.resolve(window.confirm('لاین صدا جدا بشه؟') ? 'yes' : 'no');
+    return new Promise((resolve) => {
+      splitAsk.hidden = false;
+      const first = splitAsk.querySelector('[data-split-answer="yes"]');
+      if (first) first.focus();
+      function finish(answer) {
+        splitAsk.hidden = true;
+        splitAsk.removeEventListener('click', onClick);
+        document.removeEventListener('keydown', onKey, true);
+        resolve(answer);
+      }
+      function onClick(event) {
+        const btn = event.target && event.target.closest ? event.target.closest('[data-split-answer]') : null;
+        if (btn) {
+          const value = btn.getAttribute('data-split-answer');
+          finish(value === 'yes' || value === 'no' ? value : null);
+        } else if (event.target === splitAsk) {
+          finish(null);
+        }
+      }
+      function onKey(event) {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+        }
+      }
+      splitAsk.addEventListener('click', onClick);
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
+  async function addToAudioLane(file, laneId) {
     const ext = fileExt(file);
     if (!isAudioFileExt(ext) && !isVideoFileExt(ext)) {
       setStatus('برای لاین صدا mp3 یا wav یا m4a یا aac یا ogg یا mp4 یا webm یا mov');
       return;
     }
     ensureLaneClips();
-    const lane = audioLane();
-    if (!lane) {
+    const lane = (laneId && laneById(laneId)) || audioLane();
+    if (!lane || lane.kind !== 'audio') {
       setStatus('لاین صدا پیدا نشد');
       return;
     }
@@ -1870,6 +2407,7 @@ async function measureDurations() {
   }
 
   function bindAudioLaneDrop(lane) {
+    const laneId = lane.getAttribute('data-lane') || '';
     lane.addEventListener('dragover', (event) => {
       event.preventDefault();
       lane.classList.add('tl-drop-on');
@@ -1881,32 +2419,86 @@ async function measureDurations() {
       event.preventDefault();
       lane.classList.remove('tl-drop-on');
       const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-      if (file) addToAudioLane(file);
+      if (file) addToAudioLane(file, laneId);
     });
     lane.addEventListener('dblclick', () => {
       if (!attachInput) return;
       attachInput.accept =
         'audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,video/mp4,video/webm,video/quicktime,.mp3,.wav,.m4a,.aac,.ogg,.mp4,.webm,.mov';
       attachInput.dataset.target = 'audio';
+      attachInput.dataset.laneId = laneId;
       attachInput.click();
     });
   }
 
+  function hideAddMenu() {
+    if (addMenu) addMenu.hidden = true;
+  }
+
+  function addEmptyLane(kind) {
+    ensureLaneClips();
+    const bucket = kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : 'video';
+    if (countLanesByKind(bucket) >= LANE_LIMIT) {
+      setStatus('بیشتر از ' + faNum(LANE_LIMIT) + ' لاین از این نوع نمی‌شه');
+      return;
+    }
+    if (kind === 'text') {
+      const id = 'text-' + Date.now().toString(36);
+      lanes.push({ id: id, label: 'متن', kind: 'text', band: 0, bands: 1, file: '' });
+      renderVideoLane();
+      scheduleSave();
+      setStatus('لاین متن اضافه شد');
+      return;
+    }
+    if (kind === 'audio') {
+      const id = 'audio-' + Date.now().toString(36);
+      lanes.push({ id: id, label: 'صدا', kind: 'audio', band: 0, bands: 1, file: '' });
+      renderVideoLane();
+      scheduleSave();
+      setStatus('لاین صدا اضافه شد؛ فایل را روی آن رها کن یا دابل‌کلیک کن');
+      return;
+    }
+    attachInput.accept = 'video/mp4,video/webm,video/quicktime,image/jpeg,image/png,image/webp,.mp4,.webm,.mov,.jpg,.jpeg,.png,.webp';
+    attachInput.dataset.target = 'video';
+    attachInput.click();
+  }
+
   zoomInput.addEventListener('input', placeTimeline);
   if (deleteLineBtn) deleteLineBtn.addEventListener('click', deleteLane);
-  if (addLineBtn && attachInput) {
-    addLineBtn.addEventListener('click', () => {
-      attachInput.accept = 'video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov';
-      attachInput.dataset.target = 'video';
-      attachInput.click();
+  if (addLineBtn) {
+    addLineBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (!addMenu) {
+        addEmptyLane('video');
+        return;
+      }
+      addMenu.hidden = !addMenu.hidden;
     });
+  }
+  if (addMenu) {
+    addMenu.addEventListener('click', (event) => {
+      const btn = event.target && event.target.closest ? event.target.closest('[data-lane-kind]') : null;
+      if (!btn) return;
+      hideAddMenu();
+      addEmptyLane(btn.getAttribute('data-lane-kind') || 'video');
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (!addMenu || addMenu.hidden) return;
+    if (event.target === addLineBtn || (addLineBtn && addLineBtn.contains(event.target))) return;
+    if (addMenu.contains(event.target)) return;
+    hideAddMenu();
+  });
+  if (attachInput) {
     attachInput.addEventListener('change', () => {
       const file = attachInput.files && attachInput.files[0];
       const target = attachInput.dataset.target || 'video';
+      const laneId = attachInput.dataset.laneId || '';
       attachInput.value = '';
       attachInput.dataset.target = 'video';
+      attachInput.dataset.laneId = '';
       if (!file) return;
-      if (target === 'audio') addToAudioLane(file);
+      if (target === 'audio') addToAudioLane(file, laneId);
       else addAttachedLine(file);
     });
   }
@@ -1992,18 +2584,18 @@ async function measureDurations() {
   volumeInput.addEventListener('input', () => {
     if (picked.kind !== 'clip' || !clips[picked.index]) return;
     const clip = clips[picked.index];
-    if (!isAudioClip(clip)) return;
+    if (!clipHasSound(clip)) return;
     clip.volume = Number(volumeInput.value) / 100;
     volumeOut.textContent = faNum(volumeInput.value);
     syncMuteIcon(clip.volume < 0.01);
     syncAudioLane(false);
     refreshClipTag(picked.index);
-    scheduleSave();
+    scheduleSave('volume');
   });
   muteBtn.addEventListener('click', () => {
     if (picked.kind !== 'clip' || !clips[picked.index]) return;
     const clip = clips[picked.index];
-    if (!isAudioClip(clip)) return;
+    if (!clipHasSound(clip)) return;
     clip.volume = (clip.volume || 0) < 0.01 ? 1 : 0;
     showPicked();
     syncAudioLane(false);
@@ -2035,8 +2627,15 @@ async function measureDurations() {
     if (picked.kind === 'word') beginEditWord(picked.index);
   });
   addWordBtn.addEventListener('click', () => {
-    if (picked.kind === 'word') addWord(picked.index);
+    if (!words.length) addWord(0);
+    else if (picked.kind === 'word') addWord(picked.index);
   });
+  if (addPauseBtn) {
+    addPauseBtn.addEventListener('click', () => {
+      if (!words.length) addPause(0);
+      else if (picked.kind === 'word') addPause(picked.index);
+    });
+  }
   deleteWordBtn.addEventListener('click', () => {
     if (picked.kind === 'word') deleteWord(picked.index);
   });
@@ -2114,7 +2713,27 @@ async function measureDurations() {
 
   document.addEventListener('keydown', (event) => {
     const tag = event.target && event.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && (event.key === 's' || event.key === 'S')) {
+      event.preventDefault();
+      if (ready) flushSave();
+      return;
+    }
+    if (mod && (event.key === 'z' || event.key === 'Z')) {
+      if (inField) return;
+      event.preventDefault();
+      if (event.shiftKey) redoEdit();
+      else undoEdit();
+      return;
+    }
+    if (mod && (event.key === 'y' || event.key === 'Y')) {
+      if (inField) return;
+      event.preventDefault();
+      redoEdit();
+      return;
+    }
+    if (inField) return;
     if ((event.key === 'Delete' || event.key === 'Backspace') && picked.kind === 'word' && words[picked.index]) {
       event.preventDefault();
       deleteWord(picked.index);

@@ -20,8 +20,12 @@
     cutStartedAt: 0,
     extraStreams: [],
     extraVideos: [],
+    screenStream: null,
+    screenVideo: null,
   };
   window.__reel = state;
+  const SCREEN_ID = 'screen';
+  const SCREEN_LABEL = 'صفحه نمایش';
 
   // The physical webcam decides what resolution it actually hands back for a
   // requested width/height, and that choice is not reliable across devices
@@ -50,8 +54,30 @@
   let previewToken = 0;
   let devicesReady = false;
 
-  function multiActive() {
+  function pickMode() {
     return !!(state.split || state.rotate);
+  }
+
+  function screenLive() {
+    return !!(state.screenStream && state.screenStream.getVideoTracks().some((t) => t.readyState === 'live'));
+  }
+
+  // Screen share alone (no multi camera mode) still needs the composed
+  // canvas: the chosen camera and the screen side by side.
+  function multiActive() {
+    return pickMode() || screenLive();
+  }
+
+  function wantedIds() {
+    const order = state.splitOrder || [];
+    if (!pickMode()) {
+      const cam = cameraSelect.value;
+      const pick = order.filter((id) => id === cam || id === SCREEN_ID);
+      if (!pick.includes(cam) && cam) pick.unshift(cam);
+      return pick;
+    }
+    const on = state.splitOn || [];
+    return order.filter((id) => on.includes(id));
   }
 
   function cutIntervalMs() {
@@ -513,13 +539,11 @@
     const canvasStream = canvas.captureStream(30);
     state.canvasStream = canvasStream;
     const audioTrack = stream.getAudioTracks()[0];
-    let recordedAudio = audioTrack;
+    // Record the raw mic track. Routing through AudioContext destination can
+    // leave MediaRecorder with silence even when the meter moves.
     if (audioTrack) {
       state.audioContext = new AudioContext();
       const source = state.audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
-      const dest = state.audioContext.createMediaStreamDestination();
-      source.connect(dest);
-      recordedAudio = dest.stream.getAudioTracks()[0] || audioTrack;
       state.analyser = state.audioContext.createAnalyser();
       state.analyser.fftSize = 2048;
       source.connect(state.analyser);
@@ -532,7 +556,7 @@
       silentSink.connect(state.audioContext.destination);
       if (state.audioContext.state === 'suspended') state.audioContext.resume().catch(() => {});
     }
-    const combined = canvasStream.getVideoTracks().concat(recordedAudio ? [recordedAudio] : []);
+    const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
     state.stream = new MediaStream(combined);
     preview.srcObject = state.stream;
 
@@ -714,6 +738,18 @@
     ctx.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, destX, destY, destW, destH);
   }
 
+  function drawContain(source, destX, destY, destW, destH) {
+    const sw = source.videoWidth || source.width;
+    const sh = source.videoHeight || source.height;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(destX, destY, destW, destH);
+    if (!sw || !sh || destH < 1 || destW < 1) return;
+    const scale = Math.min(destW / sw, destH / sh);
+    const w = sw * scale;
+    const h = sh * scale;
+    ctx.drawImage(source, 0, 0, sw, sh, destX + (destW - w) / 2, destY + (destH - h) / 2, w, h);
+  }
+
   function readList(key) {
     try {
       const value = JSON.parse(localStorage.getItem(key) || 'null');
@@ -745,6 +781,7 @@
         list.push({ id: 'phone:' + phone.id, label: phone.label || 'دوربین موبایل' });
       });
     }
+    if (screenLive()) list.push({ id: SCREEN_ID, label: SCREEN_LABEL });
     return list;
   }
 
@@ -759,7 +796,7 @@
       if (!order.includes(id)) order.push(id);
     });
     order = order.filter((id) => idSet.has(id));
-    const seenLive = seen.filter((id) => id.indexOf('phone:') !== 0 || idSet.has(id));
+    const seenLive = seen.filter((id) => (id.indexOf('phone:') !== 0 && id !== SCREEN_ID) || idSet.has(id));
     if (!enabled) {
       enabled = order.slice();
     } else {
@@ -785,8 +822,8 @@
       byId[slot.id] = slot;
     });
     const next = [];
-    state.splitOrder.forEach((id) => {
-      if (state.splitOn.includes(id) && byId[id]) next.push(byId[id]);
+    wantedIds().forEach((id) => {
+      if (byId[id]) next.push(byId[id]);
     });
     state.splitSlots = next;
   }
@@ -809,8 +846,8 @@
       }
       releaseExtras();
       syncSplitLists();
-      const wanted = state.splitOrder.filter((id) => state.splitOn.includes(id));
-      const localWanted = wanted.filter((id) => id.indexOf('phone:') !== 0);
+      const wanted = wantedIds();
+      const localWanted = wanted.filter((id) => id.indexOf('phone:') !== 0 && id !== SCREEN_ID);
       let missed = 0;
       for (let i = 0; i < localWanted.length; i++) {
         if (token !== previewToken) {
@@ -840,6 +877,11 @@
       }
       const slots = [];
       wanted.forEach((id) => {
+        if (id === SCREEN_ID) {
+          if (screenLive() && state.screenVideo) slots.push({ id: id, kind: 'screen', video: state.screenVideo });
+          else missed += 1;
+          return;
+        }
         if (id.indexOf('phone:') === 0) {
           const phoneId = id.slice(6);
           const phoneView = window.__reelPhone && window.__reelPhone.canvasFor
@@ -901,6 +943,11 @@
         }
         return slot.video;
       }
+      // Screen text must stay whole, so the screen is letterboxed, not cropped.
+      function drawSlot(slot, x, y, w, h) {
+        if (slot.kind === 'screen') drawContain(sourceForSlot(slot), x, y, w, h);
+        else drawCover(sourceForSlot(slot), x, y, w, h);
+      }
       function drawFrame() {
         const slotsNow = state.splitSlots || [];
         const count = slotsNow.length || 1;
@@ -908,11 +955,11 @@
           const interval = cutIntervalMs();
           const index = Math.floor((performance.now() - state.cutStartedAt) / interval) % count;
           const slot = slotsNow[index] || slotsNow[0];
-          if (slot) drawCover(sourceForSlot(slot), 0, 0, canvas.width, canvas.height);
+          if (slot) drawSlot(slot, 0, 0, canvas.width, canvas.height);
         } else {
           for (let i = 0; i < slotsNow.length; i++) {
             const box = bandBox(i, count, canvas.width, canvas.height);
-            drawCover(sourceForSlot(slotsNow[i]), box.x, box.y, box.w, box.h);
+            drawSlot(slotsNow[i], box.x, box.y, box.w, box.h);
           }
         }
         if (cornerCtx) cornerCtx.drawImage(canvas, 0, 0, corner.width, corner.height);
@@ -923,13 +970,9 @@
       const canvasStream = canvas.captureStream(30);
       state.canvasStream = canvasStream;
       const audioTrack = stream.getAudioTracks()[0];
-      let recordedAudio = audioTrack;
       if (audioTrack) {
         state.audioContext = new AudioContext();
         const source = state.audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
-        const dest = state.audioContext.createMediaStreamDestination();
-        source.connect(dest);
-        recordedAudio = dest.stream.getAudioTracks()[0] || audioTrack;
         state.analyser = state.audioContext.createAnalyser();
         state.analyser.fftSize = 2048;
         source.connect(state.analyser);
@@ -939,7 +982,7 @@
         silentSink.connect(state.audioContext.destination);
         if (state.audioContext.state === 'suspended') state.audioContext.resume().catch(() => {});
       }
-      const combined = canvasStream.getVideoTracks().concat(recordedAudio ? [recordedAudio] : []);
+      const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
       state.stream = new MediaStream(combined);
       preview.srcObject = state.stream;
       readiness.dataset.camera = state.rotate
@@ -1048,7 +1091,7 @@
     const box = document.getElementById('split-picks');
     if (!box) return;
     if (cutSecondsWrap) cutSecondsWrap.hidden = !state.rotate;
-    if (!multiActive()) {
+    if (!pickMode()) {
       box.hidden = true;
       box.replaceChildren();
       state.splitPickSig = '';
@@ -1193,6 +1236,123 @@
     return phase === 'recording' || phase === 'countdown';
   }
 
+  const shareBox = document.getElementById('share-screen');
+  const shareHint = document.getElementById('share-screen-hint');
+
+  function renderShareBox() {
+    const on = screenLive();
+    if (shareBox) {
+      shareBox.checked = on;
+      shareBox.disabled = captureBusy();
+      const wrap = shareBox.closest('label');
+      if (wrap) wrap.classList.toggle('on', on);
+    }
+    document.body.classList.toggle('screen-live', on);
+  }
+
+  function setShareHint(text) {
+    if (!shareHint) return;
+    shareHint.textContent = text || '';
+    shareHint.hidden = !text;
+  }
+
+  async function restartAfterShare() {
+    renderShareBox();
+    renderSplitPicks();
+    try {
+      await startPreview(cameraSelect.value, micSelect.value);
+    } catch (err) {
+      if (!streamIsLive()) showMediaError(err);
+    }
+  }
+
+  async function startScreenShare() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      setShareHint('این مرورگر اشتراک صفحه نداره. کروم یا اج رو باز کن.');
+      renderShareBox();
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'monitor', frameRate: { ideal: 30 } },
+        audio: false,
+        monitorTypeSurfaces: 'include',
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+      });
+    } catch (err) {
+      setShareHint(err && err.name === 'NotAllowedError' ? 'اشتراک صفحه لغو شد' : 'صفحه به اشتراک گذاشته نشد');
+      renderShareBox();
+      return;
+    }
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stopTracks(stream.getTracks());
+      renderShareBox();
+      return;
+    }
+    const video = document.createElement('video');
+    video.className = 'split-src';
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    document.body.appendChild(video);
+    await video.play().catch(() => {});
+    await waitForVideoSize(video).catch(() => {});
+    state.screenStream = stream;
+    state.screenVideo = video;
+    track.addEventListener('ended', () => stopScreenShare());
+    syncSplitLists();
+    if (!state.splitOn.includes(SCREEN_ID)) {
+      state.splitOn = state.splitOrder.filter((id) => id === SCREEN_ID || state.splitOn.includes(id));
+      writeList('reel.splitOn', state.splitOn);
+    }
+    setShareHint('');
+    await restartAfterShare();
+  }
+
+  let shareStopWait = 0;
+  function stopScreenShare() {
+    if (!state.screenStream) return;
+    // Swapping the composed stream mid take would break the recorder, so the
+    // screen band stays (frozen) until the take ends.
+    if (captureBusy()) {
+      if (!shareStopWait) {
+        shareStopWait = setInterval(() => {
+          if (captureBusy()) return;
+          clearInterval(shareStopWait);
+          shareStopWait = 0;
+          stopScreenShare();
+        }, 500);
+      }
+      return;
+    }
+    stopTracks(state.screenStream.getTracks());
+    state.screenStream = null;
+    if (state.screenVideo) {
+      state.screenVideo.srcObject = null;
+      if (state.screenVideo.parentNode) state.screenVideo.parentNode.removeChild(state.screenVideo);
+    }
+    state.screenVideo = null;
+    restartAfterShare();
+  }
+
+  if (shareBox) {
+    shareBox.addEventListener('change', () => {
+      if (captureBusy()) {
+        shareBox.checked = screenLive();
+        state.phoneNote = 'وسط ضبط عوضش نکن';
+        renderReadiness();
+        return;
+      }
+      if (shareBox.checked) startScreenShare();
+      else stopScreenShare();
+    });
+  }
+  setInterval(renderShareBox, 700);
+
   async function setOrientation(orientation) {
     if (state.orientation === orientation) return;
     state.orientation = orientation;
@@ -1223,7 +1383,7 @@
 
     cameraSelect.addEventListener('change', async () => {
       storeId('reel.cameraId', cameraSelect.value);
-      if (multiActive()) return;
+      if (pickMode()) return;
       try {
         await startPreview(cameraSelect.value, micSelect.value);
       } catch (err) {
@@ -1358,15 +1518,18 @@
   state.ensureStream = ensureStream;
   state.cameraLabels = function () {
     if (!multiActive()) return [];
-    const order = state.splitOrder || [];
-    const on = state.splitOn || [];
     const labels = [];
-    order.forEach((id) => {
-      if (!on.includes(id)) return;
+    const ids = state.splitSlots && state.splitSlots.length ? state.splitSlots.map((slot) => slot.id) : wantedIds();
+    ids.forEach((id) => {
+      if (id === SCREEN_ID) {
+        labels.push(SCREEN_LABEL);
+        return;
+      }
+      const phoneId = id.indexOf('phone:') === 0 ? id.slice(6) : id;
       const cam = (state.cameras || []).find((item) => item.deviceId === id);
       const phone =
         window.__reelPhone && window.__reelPhone.cameras
-          ? window.__reelPhone.cameras().find((item) => item.id === id || item.deviceId === id)
+          ? window.__reelPhone.cameras().find((item) => item.id === phoneId || item.deviceId === id)
           : null;
       labels.push((cam && cam.label) || (phone && phone.label) || id);
     });

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>بایگانی ریل استودیو</title>
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=11" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -35,11 +35,15 @@
 <div class="sub-page">
   <a href="/" class="back-btn">بازگشت</a>
   <h1>بایگانی</h1>
-  <p class="page-lead">ضبط‌های قبول‌شده اینجاست. یکی رو برای زیرنویس باز کن، یا ویدیو رو پاک کن. خود سناریو می‌مونه.</p>
+  <p class="page-lead">ضبط‌های قبول‌شده اینجاست. یکی رو برای زیرنویس باز کن، یا ویدیو رو پاک کن. خود سناریو می‌مونه. کارش تموم شد؟ «اتمام و آرشیو» رو بزن تا بره تب آرشیو.</p>
+  <div class="settings-tabs list-tabs" role="tablist">
+    <button type="button" class="on" data-list-tab="list" role="tab">لیست</button>
+    <button type="button" data-list-tab="archive" role="tab">آرشیو</button>
+  </div>
   <p id="archive-status" class="page-lead"></p>
   <div id="archive-list" class="archive-list"></div>
 </div>
 <script src="/shell.js"></script>
-<script src="/archive.js"></script>
+<script src="/archive.js?v=2"></script>
 </body>
 </html>

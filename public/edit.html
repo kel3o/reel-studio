@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ویرایش زیرنویس</title>
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=11" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -166,7 +166,8 @@
       </div>
       <div id="tl-word-tools" class="tl-toolset" hidden>
         <button id="tl-edit-word" type="button" class="btn btn-edit">ویرایش</button>
-        <button id="tl-add-word" type="button" class="btn btn-add">افزودن</button>
+        <button id="tl-add-word" type="button" class="btn btn-add">افزودن کلمه</button>
+        <button id="tl-add-pause" type="button" class="btn">افزودن مکث</button>
         <button id="tl-delete-word" type="button" class="btn btn-danger">حذف</button>
       </div>
       </div>
@@ -175,7 +176,14 @@
           <input id="tl-zoom" type="range" min="1" max="8" step="0.1" value="1" />
         </label>
         <button id="tl-delete-line" type="button" class="btn btn-danger">حذف خط</button>
-        <button id="tl-add-line" type="button" class="btn">خط جدید</button>
+        <div class="tl-add-wrap">
+          <button id="tl-add-line" type="button" class="btn">خط جدید</button>
+          <div id="tl-add-menu" class="tl-add-menu" hidden>
+            <button type="button" data-lane-kind="video">تصویر / ویدیو</button>
+            <button type="button" data-lane-kind="audio">صدا</button>
+            <button type="button" data-lane-kind="text">متن</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="tl-wrap">
@@ -195,7 +203,18 @@
     </div>
   </section>
 </div>
+<div id="split-ask" class="picker-layer" hidden>
+  <div class="picker-card split-ask-card" role="dialog" aria-modal="true" aria-labelledby="split-ask-title">
+    <h2 id="split-ask-title">لاین صدا جدا بشه؟</h2>
+    <p class="opt-hint">«آره» یعنی تصویر بی‌صدا روی یه خط و صداش روی یه خط صدای جدا. «نه» یعنی صدا و تصویر با هم روی همون یه خط می‌مونن.</p>
+    <div class="split-ask-btns">
+      <button type="button" class="btn btn-accent" data-split-answer="yes">آره، جدا کن</button>
+      <button type="button" class="btn" data-split-answer="no">نه، با هم بمونه</button>
+      <button type="button" class="btn" data-split-answer="cancel">بی‌خیال</button>
+    </div>
+  </div>
+</div>
 <script src="/shell.js"></script>
-<script src="/edit.js?v=5"></script>
+<script src="/edit.js?v=11"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ریل استودیو</title>
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=11" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -33,13 +33,6 @@
   </nav>
 </header>
 <div class="app">
-  <aside class="scripts-panel">
-    <div class="scripts-panel-head">
-      <h1>سناریوها</h1>
-    </div>
-    <a href="/script.html" class="manual-open">افزودن سناریو</a>
-    <ul id="script-list" class="script-list"></ul>
-  </aside>
   <main class="paragraphs-panel">
     <section class="device-setup dash-setup">
       <div class="dash-layout">
@@ -58,6 +51,13 @@
           <p id="readiness" class="readiness mic-status">وضعیت میکروفون</p>
         </div>
         <div class="dash-controls">
+          <div class="set-card">
+            <span>ضبط ویدیو</span>
+            <div class="rec-start-btns">
+              <button id="rec-free" type="button" class="orientation-btn rec-start-btn">ضبط بدون سناریو</button>
+              <button id="rec-script" type="button" class="orientation-btn rec-start-btn">ضبط از روی سناریو</button>
+            </div>
+          </div>
           <div class="set-card">
             <span>نسبت تصویر</span>
             <div class="orientation-group set-ratios" role="group" aria-label="نسبت تصویر">
@@ -82,6 +82,11 @@
               <button id="split-cameras" type="button" class="orientation-btn">چند دوربین</button>
               <button id="rotate-cameras" type="button" class="orientation-btn">برش دوربین</button>
             </div>
+            <label class="share-screen-wrap">
+              <input id="share-screen" type="checkbox" />
+              <span>اشتراک صفحه</span>
+            </label>
+            <p id="share-screen-hint" class="opt-hint" hidden></p>
             <label id="cut-seconds-wrap" class="cut-seconds-wrap" hidden>هر چند ثانیه برش
               <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
             </label>
@@ -126,7 +131,7 @@
           <button id="tp-smaller" type="button" class="tp-icon-btn" title="کوچک‌تر" aria-label="کوچک‌تر">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 4v3h2.5l-3.5 9H5l-.8 2h8l.8-2h-2.2L14.3 7H17V4H9zm10 8h-2v2h-2v2h2v2h2v-2h2v-2h-2v-2z"/></svg>
           </button>
-          <span class="tp-readout" id="tp-size">۴۶</span>
+          <span class="tp-readout" id="tp-size">۳۸</span>
           <button id="tp-bigger" type="button" class="tp-icon-btn" title="بزرگ‌تر" aria-label="بزرگ‌تر">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 4v3h2.2l3.5 9H14l.8 2H6.8L6 16h2.2L5.7 7H3V4h2zm11 7v2h-2v2h2v2h2v-2h2v-2h-2v-2h-2z"/></svg>
           </button>
@@ -177,16 +182,29 @@
         <p>
           <kbd>فاصله</kbd> شروع و توقف ضبط
           <kbd>R</kbd> دوباره‌ضبط
-          <kbd>Enter</kbd> قبول و بعدی
-          <kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول
-          <kbd>چپ</kbd><kbd>راست</kbd> اندازه‌ی متن
+          <kbd>Enter</kbd> <span class="tp-only">قبول و بعدی</span><span class="free-only">قبول و رفتن به ادیت</span>
+          <span class="tp-only"><kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول</span>
+          <span class="tp-only"><kbd>چپ</kbd><kbd>راست</kbd> اندازه‌ی متن</span>
           <kbd>Esc</kbd> بستن
         </p>
-        <p>کلمه‌های رنگی تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
+        <p class="tp-only">کلمه‌های رنگی تاکید می‌خوان، برچسب «مکث» یعنی یک نفس بایست.</p>
+        <p class="free-only">بدون متن، فقط تصویر. یه بار پیوسته ضبط کن، بعد قبول کن تا بری ادیت.</p>
         <button id="tp-go" type="button">شروع</button>
       </div>
     </section>
   </main>
+</div>
+<div id="scenario-picker" class="picker-layer" hidden>
+  <div class="picker-card" role="dialog" aria-modal="true" aria-labelledby="scenario-picker-title">
+    <div class="picker-head">
+      <h2 id="scenario-picker-title">یه سناریو انتخاب کن</h2>
+      <button id="scenario-picker-close" type="button" class="picker-close" title="بستن" aria-label="بستن">×</button>
+    </div>
+    <input id="scenario-search" class="picker-search" type="search" placeholder="تیتر یا یه تیکه از متن رو بنویس" autocomplete="off" />
+    <ul id="scenario-pick-list" class="script-list picker-list"></ul>
+    <p id="scenario-pick-empty" class="opt-hint" hidden></p>
+    <a href="/script.html" class="manual-open picker-add">افزودن سناریو جدید</a>
+  </div>
 </div>
 <div id="settings-layer" class="settings-layer" hidden>
   <div class="settings-page">
@@ -245,9 +263,9 @@
   </div>
 </div>
 <script src="/phone-studio.js?v=13"></script>
-<script src="/devices.js?v=11"></script>
-<script src="/capture.js?v=2"></script>
-<script src="/app.js"></script>
+<script src="/devices.js?v=13"></script>
+<script src="/capture.js?v=6"></script>
+<script src="/app.js?v=2"></script>
 <script src="/shell.js"></script>
 </body>
 </html>

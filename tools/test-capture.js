@@ -76,12 +76,34 @@ async function main() {
       300
     );
 
+    await cdp.evaluate('document.getElementById("rec-script").click()');
     await pollUntil(
-      async () => (await cdp.evaluate('document.querySelectorAll("#script-list button").length')) >= 1,
+      async () => (await cdp.evaluate('document.getElementById("scenario-picker").hidden')) === false,
+      5000,
+      200
+    );
+    await pollUntil(
+      async () => (await cdp.evaluate('document.querySelectorAll("#scenario-pick-list button.script-open").length')) >= 1,
       10000,
       300
     );
-    await cdp.evaluate('document.querySelector("#script-list button").click()');
+    await cdp.evaluate(`(() => {
+      const box = document.getElementById('scenario-search');
+      box.value = 'پاراگراف دومه';
+      box.dispatchEvent(new Event('input'));
+    })()`);
+    const hits = await cdp.evaluate(
+      'Array.from(document.querySelectorAll("#scenario-pick-list button.script-open")).map((b) => b.dataset.path)'
+    );
+    assert.ok(
+      Array.isArray(hits) && hits.some((p) => /sample-script/.test(p)),
+      'search on part of the text did not find the fixture scenario'
+    );
+    await cdp.evaluate(`(() => {
+      const rows = Array.from(document.querySelectorAll('#scenario-pick-list button.script-open'));
+      const hit = rows.find((b) => /sample-script/.test(b.dataset.path || '')) || rows[0];
+      hit.click();
+    })()`);
 
     await pollUntil(
       async () => (await cdp.evaluate('window.__reelCapture ? window.__reelCapture.paragraphs.length : 0')) === 3,
@@ -133,6 +155,21 @@ async function main() {
       retaken.takes[retaken.takes.length - 1],
       'accepted take for the retaken paragraph is not the later file'
     );
+
+    // Free recording: one continuous take, accept opens the editor.
+    await dispatchKey(cdp, 'Escape', 'Escape');
+    await pollUntil(async () => (await cdp.evaluate('window.__reelCapture.phase')) === 'idle', 5000, 200);
+    await cdp.evaluate('document.getElementById("rec-free").click()');
+    await pollUntil(async () => (await cdp.evaluate('window.__reelCapture.free === true')) === true, 5000, 200);
+    const freeSlug = await cdp.evaluate('window.__reelCapture.slug');
+    assert.ok(/^free-\d{14}$/.test(freeSlug), `unexpected free slug ${freeSlug}`);
+    await recordAndReview(cdp);
+    await dispatchKey(cdp, 'Enter', 'Enter');
+    await pollUntil(async () => /\/edit\.html\?slug=free-/.test(await cdp.evaluate('location.href')), 15000, 300);
+    const freeSession = JSON.parse(fs.readFileSync(path.join(takesDir, freeSlug, 'session.json'), 'utf8'));
+    assert.strictEqual(freeSession.free, true, 'free session is not marked free');
+    assert.strictEqual(freeSession.paragraphs.length, 1, 'free session should hold one take');
+    assert.ok(freeSession.paragraphs[0].accepted, 'free take was not accepted');
 
     console.log('OK: phase 3 self test passed');
   } finally {

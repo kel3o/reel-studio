@@ -10,6 +10,7 @@
     chunks: [],
     audioChunks: [],
     pendingAudioFile: null,
+    free: false,
   };
   window.__reelCapture = state;
 
@@ -108,6 +109,11 @@
       },
       extra || {}
     );
+    if (state.free) {
+      payload.visible = false;
+      payload.scrolling = false;
+      payload.html = '';
+    }
     api.sendTeleprompter(payload);
   }
 
@@ -139,7 +145,7 @@
   }
 
   let speed = 3;
-  let fontSize = 46;
+  let fontSize = 38;
   let lineHeight = 1.75;
   // The known bug: adding a sub pixel delta straight to scrollTop truncates
   // to zero every frame at slow speeds, because scrollTop always reads back
@@ -181,7 +187,7 @@
 
   function syncCaptionLink() {
     if (!captionLink) return;
-    const show = state.phase === 'done' && !!state.slug;
+    const show = state.phase === 'done' && !!state.slug && !state.free;
     captionLink.hidden = !show;
     if (!show) {
       captionBuildKey = '';
@@ -358,6 +364,16 @@
     state.chunks = [];
     state.audioChunks = [];
     state.pendingAudioFile = null;
+    state.audioRecorder = null;
+    const liveVideo = stream.getVideoTracks().filter((t) => t.readyState === 'live');
+    if (!liveVideo.length) {
+      setStatus('تصویر دوربین برای ضبط آماده نیست');
+      state.phase = 'ready';
+      updateRecordButton();
+      return;
+    }
+    // Record the live preview stream itself. Cloning a canvas capture track
+    // yields a black picture, and a second recorder can drop that video.
     const mimeType = pickMimeType();
     const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     recorder.ondataavailable = (e) => {
@@ -365,26 +381,7 @@
     };
     recorder.onstop = onRecordingStopped;
     state.mediaRecorder = recorder;
-    recorder.start();
-
-    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
-    state.audioRecorder = null;
-    if (audioTracks.length) {
-      const audioStream = new MediaStream(audioTracks);
-      const audioMime = pickAudioMimeType();
-      try {
-        const audioRecorder = audioMime
-          ? new MediaRecorder(audioStream, { mimeType: audioMime })
-          : new MediaRecorder(audioStream);
-        audioRecorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) state.audioChunks.push(e.data);
-        };
-        state.audioRecorder = audioRecorder;
-        audioRecorder.start();
-      } catch (err) {
-        state.audioRecorder = null;
-      }
-    }
+    recorder.start(250);
     pushTeleprompter({ visible: true, scrolling: true, resetScroll: true });
   }
 
@@ -397,33 +394,23 @@
     }
   }
 
-  async function uploadClip(blob, paragraphIndex, take, kind) {
+  async function uploadClip(blob, paragraphIndex, take) {
     const nn = String(paragraphIndex + 1).padStart(2, '0');
-    const query =
-      `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}` +
-      (kind === 'audio' ? '&kind=audio' : '');
+    const query = `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}`;
     const res = await fetch(query, { method: 'POST', body: blob });
     const data = await res.json();
-    return data.file;
+    return data;
   }
 
   async function onRecordingStopped() {
-    await waitRecorderStop(state.audioRecorder);
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     const p = state.paragraphs[state.current];
     const take = p.takes.length + 1;
 
-    const fileName = await uploadClip(blob, p.index, take);
+    const uploaded = await uploadClip(blob, p.index, take);
+    const fileName = uploaded.file;
     p.takes.push(fileName);
-    state.pendingAudioFile = null;
-    if (state.audioChunks.length) {
-      try {
-        const audioBlob = new Blob(state.audioChunks, { type: 'audio/webm' });
-        state.pendingAudioFile = await uploadClip(audioBlob, p.index, take, 'audio');
-      } catch (err) {
-        state.pendingAudioFile = null;
-      }
-    }
+    state.pendingAudioFile = uploaded.audioFile || null;
 
     reviewVideo.src = URL.createObjectURL(blob);
     reviewVideo.hidden = false;
@@ -442,6 +429,7 @@
     const body = {
       script: state.slug,
       title: state.title || '',
+      free: state.free || undefined,
       paragraphs: state.paragraphs.map((p) => ({
         index: p.index,
         text: p.text,
@@ -503,6 +491,12 @@
     reviewVideo.pause();
     await saveSession();
 
+    if (state.free) {
+      await openFreeInEditor(p);
+      accepting = false;
+      return;
+    }
+
     if (state.current < state.paragraphs.length - 1) {
       state.current += 1;
       state.phase = 'ready';
@@ -518,6 +512,25 @@
     renderProgress();
     if (state.phase === 'done') pushTeleprompter({ visible: false, scrolling: false });
     accepting = false;
+  }
+
+  async function openFreeInEditor(p) {
+    const slug = state.slug;
+    state.phase = 'done';
+    updateRecordButton();
+    setStatus('داره ادیتور باز می‌شه');
+    const durations = {};
+    if (p && p.accepted && Number(p.duration) > 0.05) durations[p.accepted] = Number(p.duration);
+    try {
+      await fetch('/api/captions/build?slug=' + encodeURIComponent(slug), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ durations }),
+      });
+    } catch (err) {
+      // the editor builds the timeline itself when this did not land
+    }
+    location.href = '/edit.html?slug=' + encodeURIComponent(slug);
   }
 
   function retake() {
@@ -573,8 +586,9 @@
     state.title = '';
     state.paragraphs = [];
     state.current = 0;
+    state.free = false;
     panel.hidden = true;
-    panel.classList.remove('fullscreen', 'mirror');
+    panel.classList.remove('fullscreen', 'mirror', 'tp-free');
     document.body.classList.remove('tp-open');
     veil.classList.remove('tp-veil-hidden');
     updateRecordButton();
@@ -593,6 +607,8 @@
     if (e.code === 'Space') {
       e.preventDefault();
       toggleRecording();
+    } else if (state.free && e.key.indexOf('Arrow') === 0) {
+      // free recording has no text to scroll or resize
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSpeed(speed + 1);
@@ -718,6 +734,8 @@
       return;
     }
     const existing = await loadExistingSession(slug);
+    state.free = false;
+    panel.classList.remove('tp-free');
     state.slug = slug;
     state.title = title || '';
     state.paragraphs = list.map((p, i) => {
@@ -749,8 +767,53 @@
     stage.scrollTop = 0;
     setStatus(state.phase === 'done' ? 'همه‌ی پاراگراف‌ها ضبط شد' : 'آماده');
     setSpeed(speed);
-    setFontSize(fontSize);
+    setFontSize(38);
     setLineHeight(lineHeight);
+    updateRecordButton();
+    renderTeleprompter();
+    renderProgress();
+  };
+
+  function freeStamp() {
+    const d = new Date();
+    const two = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() +
+      two(d.getMonth() + 1) +
+      two(d.getDate()) +
+      two(d.getHours()) +
+      two(d.getMinutes()) +
+      two(d.getSeconds())
+    );
+  }
+
+  window.startFreeSession = function () {
+    let date = '';
+    try {
+      date = new Date().toLocaleDateString('fa-IR');
+    } catch (err) {}
+    state.free = true;
+    state.slug = 'free-' + freeStamp();
+    state.title = date ? 'ضبط آزاد ' + date : 'ضبط آزاد';
+    state.paragraphs = [
+      { index: 0, text: '', emphasis: [], emphasisColors: {}, takes: [], accepted: null, acceptedAudio: null, duration: null },
+    ];
+    state.current = 0;
+    state.phase = 'ready';
+
+    panel.hidden = false;
+    panel.classList.add('fullscreen', 'tp-free');
+    panel.classList.remove('mirror');
+    document.body.classList.add('tp-open');
+    if (window.__reel && window.__reel.stream) {
+      liveCam.srcObject = window.__reel.stream;
+    }
+    veil.classList.remove('tp-veil-hidden');
+    veilTitle.textContent = 'ضبط آزاد';
+    scrollPos = 0;
+    stage.scrollTop = 0;
+    clockSeconds = 0;
+    setStatus('آماده');
     updateRecordButton();
     renderTeleprompter();
     renderProgress();

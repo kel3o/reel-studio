@@ -160,6 +160,7 @@ function scriptsFromDir(dir, source) {
         source,
         title: title || file,
         paragraphCount: paragraphs.length,
+        text: paragraphs.map((p) => p.text).join(' ').slice(0, 20000),
         mtime: stat.mtimeMs,
       };
     });
@@ -167,8 +168,44 @@ function scriptsFromDir(dir, source) {
 
 function listScripts() {
   const items = scriptsFromDir(config.scriptsDir, 'file').concat(scriptsFromDir(MANUAL_DIR, 'manual'));
+  const archived = readArchived();
+  const shelf = new Set(archived.scenarios.map((p) => path.resolve(p).toLowerCase()));
+  items.forEach((item) => {
+    item.archived = shelf.has(path.resolve(item.path).toLowerCase());
+  });
   items.sort((a, b) => b.mtime - a.mtime);
   return items;
+}
+
+const ARCHIVED_PATH = path.join(ROOT, 'archived.json');
+
+function readArchived() {
+  let data = null;
+  try {
+    if (fs.existsSync(ARCHIVED_PATH)) data = JSON.parse(fs.readFileSync(ARCHIVED_PATH, 'utf8'));
+  } catch (err) {
+    data = null;
+  }
+  const clean = (list) => (Array.isArray(list) ? list.filter((v) => typeof v === 'string' && v) : []);
+  return {
+    scenarios: clean(data && data.scenarios),
+    recordings: clean(data && data.recordings),
+  };
+}
+
+function writeArchived(data) {
+  fs.writeFileSync(ARCHIVED_PATH, JSON.stringify(data, null, 2));
+}
+
+function setArchived(type, id, archived) {
+  const data = readArchived();
+  const key = type === 'scenario' ? 'scenarios' : 'recordings';
+  const norm = (v) => (type === 'scenario' ? path.resolve(v).toLowerCase() : v);
+  const target = norm(id);
+  const rest = data[key].filter((v) => norm(v) !== target);
+  if (archived) rest.push(type === 'scenario' ? path.resolve(id) : id);
+  data[key] = rest;
+  writeArchived(data);
 }
 
 function makeManualSlug(title) {
@@ -226,7 +263,41 @@ function runProcess(cmd, args) {
   });
 }
 
+function probeWithFfmpeg(filePath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG, ['-hide_banner', '-nostats', '-progress', 'pipe:2', '-i', filePath, '-map', '0', '-c', 'copy', '-f', 'null', '-']);
+    const err = [];
+    child.stderr.on('data', (chunk) => err.push(chunk));
+    child.on('error', () => reject(fail(500, 'مدت ویدیو خوانده نشد')));
+    child.on('close', () => {
+      const text = Buffer.concat(err).toString('utf8');
+      let duration = 0;
+      const header = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
+      if (header) duration = Number(header[1]) * 3600 + Number(header[2]) * 60 + Number(header[3]);
+      const progress = [...text.matchAll(/out_time_us=(\d+)/g)];
+      if (progress.length) duration = Math.max(duration, Number(progress[progress.length - 1][1]) / 1e6);
+      const size = /Stream #[^\n]*Video:[^\n]*?\s(\d{2,5})x(\d{2,5})/.exec(text);
+      if (!(duration > 0)) {
+        reject(fail(500, 'مدت ویدیو خوانده نشد'));
+        return;
+      }
+      resolve({
+        duration,
+        width: size ? Number(size[1]) : 0,
+        height: size ? Number(size[2]) : 0,
+        video: /Stream #[^\n]*Video:/.test(text),
+        audio: /Stream #[^\n]*Audio:/.test(text),
+      });
+    });
+  });
+}
+
 function probeMedia(filePath) {
+  if (FFPROBE === 'ffprobe' && FFMPEG !== 'ffmpeg') return probeWithFfmpeg(filePath);
+  return runProbe(filePath).catch(() => probeWithFfmpeg(filePath));
+}
+
+function runProbe(filePath) {
   return runProcess(FFPROBE, [
     '-v',
     'error',
@@ -277,6 +348,52 @@ async function extractAudioFile(srcPath, destPath) {
     '128k',
     destPath,
   ]);
+}
+
+const WAVE_RATE = 50;
+const waveMemo = new Map();
+
+async function wavePeaksFor(filePath) {
+  const stat = fs.statSync(filePath);
+  const key = filePath + ':' + stat.size + ':' + stat.mtimeMs;
+  if (waveMemo.has(key)) return waveMemo.get(key);
+  const tmp = path.join(os.tmpdir(), 'reel-wave-' + crypto.randomBytes(4).toString('hex') + '.f32');
+  try {
+    await runProcess(FFMPEG, [
+      '-y',
+      '-hide_banner',
+      '-i',
+      filePath,
+      '-vn',
+      '-ac',
+      '1',
+      '-ar',
+      '8000',
+      '-f',
+      'f32le',
+      tmp,
+    ]);
+    const raw = fs.readFileSync(tmp);
+    const count = Math.floor(raw.length / 4);
+    const block = 8000 / WAVE_RATE;
+    const bars = Math.ceil(count / block);
+    const peaks = new Array(bars);
+    for (let i = 0; i < bars; i++) {
+      let max = 0;
+      const end = Math.min(count, (i + 1) * block);
+      for (let j = i * block; j < end; j++) {
+        const value = Math.abs(raw.readFloatLE(j * 4));
+        if (value > max) max = value;
+      }
+      peaks[i] = Math.round(Math.min(1, max) * 1000) / 1000;
+    }
+    const result = { rate: WAVE_RATE, peaks };
+    if (waveMemo.size > 64) waveMemo.clear();
+    waveMemo.set(key, result);
+    return result;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 function ensureAudioLane(lanes) {
@@ -441,11 +558,14 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
       : '';
   const hasAudioLane =
     existing && Array.isArray(existing.lanes) && existing.lanes.some((lane) => lane && lane.kind === 'audio');
-  if (existing && existingKey === key && !force && hasAudioLane) {
+  const audioReady =
+    hasAudioLane &&
+    (existing.audioMigrated || existing.clips.some((clip) => clip && clip.lane === 'audio'));
+  if (existing && existingKey === key && !force && audioReady) {
     if (!existing.title) existing.title = titleForSlug(slug, session);
     return existing;
   }
-  if (existing && existingKey === key && !force && !hasAudioLane) {
+  if (existing && existingKey === key && !force) {
     const lanes = ensureAudioLane(sanitizeLanes(existing.lanes || defaultVideoLanes(session.cameras || [])));
     const clips = Array.isArray(existing.clips) ? existing.clips.slice() : [];
     for (let i = 0; i < accepted.length; i++) {
@@ -474,6 +594,7 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     }
     existing.lanes = lanes;
     existing.clips = clips;
+    existing.audioMigrated = clips.some((clip) => clip && clip.lane === 'audio');
     existing.updatedAt = new Date().toISOString();
     if (!existing.title) existing.title = titleForSlug(slug, session);
     writeCaptions(slug, existing);
@@ -537,6 +658,8 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     lanes,
     clips: videoClips.concat(audioClips),
     words: buildWordsForClips(wordSource),
+    free: !!session.free,
+    audioMigrated: audioClips.length > 0,
     updatedAt: new Date().toISOString(),
   };
   writeCaptions(slug, doc);
@@ -559,15 +682,17 @@ function saveCaptionEdits(slug, body) {
   });
   const clips = normalizeSavedClips(existing.clips, body.clips, extraFiles);
   const words = sanitizeWords(body.words, clips);
-  if (!words.length) throw fail(400, 'کلمه‌ای برای زیرنویس نمانده');
+  if (!words.length && !existing.free) throw fail(400, 'کلمه‌ای برای زیرنویس نمانده');
   const doc = {
     slug,
     title: existing.title || titleForSlug(slug, null),
+    free: !!existing.free,
     style: clampStyle(body.style || {}),
     cameras: Array.isArray(existing.cameras) ? existing.cameras.slice() : [],
     lanes,
     clips,
     words,
+    audioMigrated: Boolean(existing.audioMigrated || clips.some((clip) => clip && clip.lane === 'audio')),
     updatedAt: new Date().toISOString(),
   };
   writeCaptions(slug, doc);
@@ -576,6 +701,7 @@ function saveCaptionEdits(slug, body) {
 
 function listArchive() {
   if (!fs.existsSync(TAKES_DIR)) return [];
+  const shelf = new Set(readArchived().recordings);
   const items = fs
     .readdirSync(TAKES_DIR)
     .filter((slug) => SLUG_RE.test(slug))
@@ -599,6 +725,8 @@ function listArchive() {
       return {
         slug,
         title: titleForSlug(slug, session),
+        free: !!session.free,
+        archived: shelf.has(slug),
         updatedAt: fs.statSync(sessionPath).mtimeMs,
         acceptedCount: accepted.length,
         paragraphCount: paragraphs.length,
@@ -618,14 +746,16 @@ function deleteRecording(slug) {
   fs.rmSync(dir, { recursive: true, force: true });
   const rendered = path.resolve(renderPathFor(slug));
   if (isInsideDir(OUT_DIR, rendered) && fs.existsSync(rendered)) fs.rmSync(rendered, { force: true });
+  if (readArchived().recordings.includes(slug)) setArchived('recording', slug, false);
 }
 
 async function burnCaptions(slug, metrics) {
   if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
   const doc = readCaptions(slug);
-  if (!doc || !Array.isArray(doc.clips) || !doc.clips.length || !Array.isArray(doc.words) || !doc.words.length) {
+  if (!doc || !Array.isArray(doc.clips) || !doc.clips.length || !Array.isArray(doc.words)) {
     throw fail(404, 'اول زیرنویس را ذخیره کن');
   }
+  if (!doc.words.length && !doc.free) throw fail(404, 'اول زیرنویس را ذخیره کن');
   const style = clampStyle(doc.style);
   const font = resolveFont(style.font, PUBLIC_DIR) || resolveFont('vazir', PUBLIC_DIR);
   if (!font) throw fail(500, 'فونت زیرنویس پیدا نشد');
@@ -646,6 +776,7 @@ async function burnCaptions(slug, metrics) {
     const videoLanes = lanes.filter((item) => item && item.kind !== 'audio');
     const lane = lanes.find((item) => item.id === clip.lane) || null;
     const isAudioLane = !!(lane && lane.kind === 'audio');
+    const keepsSound = !!(lane && lane.kind === 'file' && lane.withAudio && info.audio);
     const videoLaneIndex = isAudioLane
       ? -1
       : Math.max(
@@ -661,13 +792,22 @@ async function burnCaptions(slug, metrics) {
       srcIn,
       srcSpan,
       speed,
-      volume: isAudioLane ? volume : 0,
+      volume: isAudioLane || keepsSound ? volume : 0,
       start: Number(clip.start) || 0,
       laneIndex: videoLaneIndex,
       cropBands: lane && lane.kind === 'band' ? lane.bands : 0,
       cropBand: lane && lane.kind === 'band' ? lane.band : 0,
-      useAudio: isAudioLane,
+      useAudio: isAudioLane || keepsSound,
       audioOnly: isAudioLane || (!info.video && !!info.audio),
+    });
+  }
+  if (!metas.some((meta) => meta.useAudio)) {
+    const primaryIndex = 0;
+    metas.forEach((meta) => {
+      if (meta.audioOnly || !meta.audio) return;
+      if (Number(meta.laneIndex) !== primaryIndex) return;
+      meta.useAudio = true;
+      meta.volume = 1;
     });
   }
   const visualMetas = metas.filter((meta) => !meta.audioOnly && meta.video !== false && Number(meta.laneIndex) >= 0);
@@ -720,6 +860,18 @@ async function burnCaptions(slug, metrics) {
   } finally {
     fs.rmSync(fontDir, { recursive: true, force: true });
   }
+}
+
+async function splitAttachAudio(dir, full, duration) {
+  const audioFile = 'attach-' + crypto.randomBytes(6).toString('hex') + '.m4a';
+  const audioFull = path.join(dir, audioFile);
+  await runProcess(FFMPEG, ['-y', '-hide_banner', '-i', full, '-vn', '-c:a', 'aac', '-b:a', '160k', audioFull]);
+  let audioDuration = duration;
+  try {
+    const audioInfo = await probeMedia(audioFull);
+    audioDuration = audioInfo.duration || duration;
+  } catch (err) {}
+  return { audioFile, audioDuration };
 }
 
 function buildManualMarkdown(title, text) {
@@ -917,6 +1069,7 @@ const server = http.createServer((req, res) => {
     }
     try {
       fs.unlinkSync(resolved);
+      setArchived('scenario', resolved, false);
       sendJson(res, 200, { ok: true });
     } catch (err) {
       sendJson(res, 500, { error: err.message });
@@ -934,12 +1087,25 @@ const server = http.createServer((req, res) => {
       return;
     }
     readRawBody(req)
-      .then((buffer) => {
+      .then(async (buffer) => {
         const dir = path.join(TAKES_DIR, slug);
         fs.mkdirSync(dir, { recursive: true });
         const fileName = kind === 'audio' ? `${paragraph}-${take}-a.webm` : `${paragraph}-${take}.webm`;
-        fs.writeFileSync(path.join(dir, fileName), buffer);
-        sendJson(res, 200, { file: fileName });
+        const full = path.join(dir, fileName);
+        fs.writeFileSync(full, buffer);
+        let audioFile = '';
+        if (kind !== 'audio') {
+          const companion = audioCompanionName(fileName);
+          if (companion) {
+            try {
+              await extractAudioFile(full, path.join(dir, companion));
+              audioFile = companion;
+            } catch (err) {
+              audioFile = '';
+            }
+          }
+        }
+        sendJson(res, 200, { file: fileName, audioFile });
       })
       .catch((err) => sendJson(res, 500, { error: err.message }));
     return;
@@ -1020,6 +1186,40 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       sendJson(res, 500, { error: err.message });
     }
+    return;
+  }
+
+  if (pathname === '/api/archive-state' && req.method === 'POST') {
+    readRawBody(req)
+      .then((buffer) => {
+        let body;
+        try {
+          body = JSON.parse(buffer.toString('utf8'));
+        } catch (err) {
+          sendJson(res, 400, { error: 'درخواست قابل خوندن نبود' });
+          return;
+        }
+        const type = body && body.type === 'scenario' ? 'scenario' : body && body.type === 'recording' ? 'recording' : '';
+        const id = String((body && body.id) || '');
+        if (!type || !id) {
+          sendJson(res, 400, { error: 'نوع و شناسه لازم است' });
+          return;
+        }
+        if (type === 'scenario') {
+          const resolved = path.resolve(id);
+          const allowed = isInsideDir(config.scriptsDir, resolved) || isInsideDir(MANUAL_DIR, resolved);
+          if (!allowed || !resolved.toLowerCase().endsWith('.md')) {
+            sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
+            return;
+          }
+        } else if (!SLUG_RE.test(id)) {
+          sendJson(res, 400, { error: 'اسم ضبط درست نیست' });
+          return;
+        }
+        setArchived(type, id, !!body.archived);
+        sendJson(res, 200, { ok: true });
+      })
+      .catch((err) => sendJson(res, 500, { error: err.message }));
     return;
   }
 
@@ -1183,28 +1383,8 @@ const server = http.createServer((req, res) => {
           audioOnly: isAudioOnlyExt(ext) || !!(info && info.audio && !info.video),
         };
         if (split && info && info.video && info.audio) {
-          const audioFile = 'attach-' + crypto.randomBytes(6).toString('hex') + '.m4a';
-          const audioFull = path.join(dir, audioFile);
           try {
-            await runProcess(FFMPEG, [
-              '-y',
-              '-hide_banner',
-              '-i',
-              full,
-              '-vn',
-              '-c:a',
-              'aac',
-              '-b:a',
-              '160k',
-              audioFull,
-            ]);
-            let audioDuration = duration;
-            try {
-              const audioInfo = await probeMedia(audioFull);
-              audioDuration = audioInfo.duration || duration;
-            } catch (err) {}
-            payload.audioFile = audioFile;
-            payload.audioDuration = audioDuration;
+            Object.assign(payload, await splitAttachAudio(dir, full, duration));
           } catch (err) {
             sendJson(res, 500, { error: 'صدای ویدیو جدا نشد' });
             return;
@@ -1213,6 +1393,49 @@ const server = http.createServer((req, res) => {
         sendJson(res, 200, payload);
       })
       .catch((err) => sendJson(res, 500, { error: err.message }));
+    return;
+  }
+
+  if (pathname === '/api/attach-split' && req.method === 'POST') {
+    const slug = parsed.searchParams.get('slug');
+    const file = String(parsed.searchParams.get('file') || '');
+    if (!slug || !SLUG_RE.test(slug) || !ATTACH_FILE_RE.test(file)) {
+      sendJson(res, 400, { error: 'فایل مشخص نیست' });
+      return;
+    }
+    const dir = path.join(TAKES_DIR, slug);
+    const full = path.resolve(dir, file);
+    if (!isInsideDir(dir, full) || !fs.existsSync(full)) {
+      sendJson(res, 404, { error: 'فایل پیدا نشد' });
+      return;
+    }
+    probeMedia(full)
+      .then(async (info) => {
+        if (!info.audio) {
+          sendJson(res, 400, { error: 'این ویدیو صدا نداره' });
+          return;
+        }
+        sendJson(res, 200, await splitAttachAudio(dir, full, info.duration || 0));
+      })
+      .catch(() => sendJson(res, 500, { error: 'صدای ویدیو جدا نشد' }));
+    return;
+  }
+
+  if (pathname === '/api/wave' && req.method === 'GET') {
+    const slug = parsed.searchParams.get('slug');
+    const file = parsed.searchParams.get('file');
+    if (!slug || !SLUG_RE.test(slug) || !file || !isClipFile(file)) {
+      sendJson(res, 400, { error: 'فایل صدا مشخص نیست' });
+      return;
+    }
+    const filePath = path.resolve(TAKES_DIR, slug, file);
+    if (!isInsideDir(path.join(TAKES_DIR, slug), filePath) || !fs.existsSync(filePath)) {
+      sendJson(res, 404, { error: 'فایل صدا پیدا نشد' });
+      return;
+    }
+    wavePeaksFor(filePath)
+      .then((wave) => sendJson(res, 200, wave))
+      .catch(() => sendJson(res, 500, { error: 'موج صدا ساخته نشد' }));
     return;
   }
 

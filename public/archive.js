@@ -1,7 +1,14 @@
 (function () {
   const listEl = document.getElementById('archive-list');
   const statusEl = document.getElementById('archive-status');
+  const tabButtons = document.querySelectorAll('[data-list-tab]');
   const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  const emptyText = {
+    list: 'هنوز ویدیویی ضبط نشده. اول یه سناریو رو تا آخر قبول کن، یا یه ضبط بدون سناریو بگیر.',
+    archive: 'هنوز چیزی آرشیو نشده.',
+  };
+  let items = [];
+  let tab = new URLSearchParams(location.search).get('tab') === 'archive' ? 'archive' : 'list';
 
   function faNum(n) {
     return String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
@@ -23,14 +30,25 @@
     }
   }
 
-  function render(items) {
+  function setTab(next) {
+    tab = next === 'archive' ? 'archive' : 'list';
+    tabButtons.forEach((btn) => btn.classList.toggle('on', btn.getAttribute('data-list-tab') === tab));
+    const url = new URL(location.href);
+    if (tab === 'archive') url.searchParams.set('tab', 'archive');
+    else url.searchParams.delete('tab');
+    history.replaceState(null, '', url.pathname + url.search);
+    render();
+  }
+
+  function render() {
     listEl.replaceChildren();
-    if (!items.length) {
-      statusEl.textContent = 'هنوز ویدیویی ضبط نشده. اول یه سناریو رو تا آخر قبول کن.';
+    const shown = items.filter((item) => !!item.archived === (tab === 'archive'));
+    if (!shown.length) {
+      statusEl.textContent = emptyText[tab];
       return;
     }
     statusEl.textContent = '';
-    items.forEach((item) => {
+    shown.forEach((item) => {
       const card = document.createElement('article');
       card.className = 'archive-card';
 
@@ -42,23 +60,14 @@
       const date = formatDate(item.updatedAt);
       if (date) bits.push(date);
       if (item.duration) bits.push(formatDuration(item.duration));
-      bits.push(faNum(item.acceptedCount) + ' از ' + faNum(item.paragraphCount) + ' پاراگراف');
+      if (item.free) bits.push('بدون سناریو');
+      else bits.push(faNum(item.acceptedCount) + ' از ' + faNum(item.paragraphCount) + ' پاراگراف');
       meta.textContent = bits.join('، ');
       info.appendChild(title);
       info.appendChild(meta);
 
       const actions = document.createElement('div');
       actions.className = 'archive-actions';
-      const edit = document.createElement('a');
-      edit.className = 'btn btn-accent';
-      edit.href = '/edit.html?slug=' + encodeURIComponent(item.slug);
-      edit.textContent = 'ویرایش زیرنویس';
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'btn btn-danger';
-      remove.textContent = 'حذف';
-      remove.addEventListener('click', () => removeItem(item, card));
-      actions.appendChild(edit);
       if (item.hasRender) {
         const fileLink = document.createElement('a');
         fileLink.className = 'btn';
@@ -76,6 +85,22 @@
         actions.appendChild(fileLink);
         actions.appendChild(openFolder);
       }
+      const edit = document.createElement('a');
+      edit.className = 'btn btn-accent';
+      edit.href = '/edit.html?slug=' + encodeURIComponent(item.slug);
+      edit.textContent = 'ویرایش زیرنویس';
+      actions.appendChild(edit);
+      const shelf = document.createElement('button');
+      shelf.type = 'button';
+      shelf.className = item.archived ? 'btn' : 'btn btn-success';
+      shelf.textContent = item.archived ? 'برگردان به لیست' : 'اتمام و آرشیو';
+      shelf.addEventListener('click', () => setArchived(item, !item.archived));
+      actions.appendChild(shelf);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn btn-danger';
+      remove.textContent = 'حذف';
+      remove.addEventListener('click', () => removeItem(item));
       actions.appendChild(remove);
 
       card.appendChild(info);
@@ -84,8 +109,28 @@
     });
   }
 
-  async function removeItem(item, card) {
-    const ok = window.confirm('این ضبط پاک بشه؟ سناریو می‌مونه.');
+  async function setArchived(item, archived) {
+    statusEl.textContent = '';
+    try {
+      const res = await fetch('/api/archive-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ type: 'recording', id: item.slug, archived }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        statusEl.textContent = data.error || 'جابه‌جا نشد';
+        return;
+      }
+      item.archived = archived;
+      render();
+    } catch (err) {
+      statusEl.textContent = 'جابه‌جا نشد';
+    }
+  }
+
+  async function removeItem(item) {
+    const ok = window.confirm(item.free ? 'این ضبط پاک بشه؟' : 'این ضبط پاک بشه؟ سناریو می‌مونه.');
     if (!ok) return;
     statusEl.textContent = '';
     try {
@@ -95,10 +140,8 @@
         statusEl.textContent = data.error || 'پاک نشد';
         return;
       }
-      card.remove();
-      if (!listEl.children.length) {
-        statusEl.textContent = 'هنوز ویدیویی ضبط نشده. اول یه سناریو رو تا آخر قبول کن.';
-      }
+      items = items.filter((other) => other !== item);
+      render();
     } catch (err) {
       statusEl.textContent = 'پاک نشد';
     }
@@ -113,11 +156,15 @@
         statusEl.textContent = (data && data.error) || 'فهرست ضبط‌ها باز نشد';
         return;
       }
-      render(data);
+      items = data;
+      setTab(tab);
     } catch (err) {
       statusEl.textContent = 'فهرست ضبط‌ها باز نشد';
     }
   }
 
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setTab(btn.getAttribute('data-list-tab')));
+  });
   load();
 })();

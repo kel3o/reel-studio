@@ -1,8 +1,37 @@
+let allScripts = [];
+
+function normalizeSearch(value) {
+  return String(value || '')
+    .replace(/[\u064B-\u065F\u0670\u200C\u200F*]/g, '')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 async function loadScripts() {
   const res = await fetch('/api/scripts');
   const scripts = await res.json();
-  const list = document.getElementById('script-list');
+  allScripts = Array.isArray(scripts) ? scripts.filter((s) => !s.archived) : [];
+  allScripts.forEach((s) => {
+    s.searchKey = normalizeSearch((s.title || '') + ' ' + (s.text || ''));
+  });
+  renderPickList();
+}
+
+function renderPickList() {
+  const list = document.getElementById('scenario-pick-list');
+  const empty = document.getElementById('scenario-pick-empty');
+  const search = document.getElementById('scenario-search');
+  if (!list) return;
+  const query = normalizeSearch(search ? search.value : '');
+  const scripts = query ? allScripts.filter((s) => s.searchKey.includes(query)) : allScripts;
   list.innerHTML = '';
+  if (empty) {
+    empty.hidden = scripts.length > 0;
+    empty.textContent = allScripts.length ? 'چیزی پیدا نشد' : 'هنوز سناریویی نیست. یکی اضافه کن.';
+  }
   for (const s of scripts) {
     const li = document.createElement('li');
     li.className = 'script-item';
@@ -10,6 +39,7 @@ async function loadScripts() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'script-open';
+    btn.dataset.path = s.path;
 
     const title = document.createElement('span');
     title.className = 'script-open-title';
@@ -22,7 +52,10 @@ async function loadScripts() {
     meta.textContent = s.source === 'manual' ? 'دستی · ' + count : count;
     btn.appendChild(meta);
 
-    btn.addEventListener('click', () => loadScript(s.path));
+    btn.addEventListener('click', () => {
+      closePicker();
+      loadScript(s.path);
+    });
     li.appendChild(btn);
 
     if (s.source === 'manual') {
@@ -89,7 +122,57 @@ async function loadScript(scriptPath) {
   }
 }
 
+function openPicker() {
+  const layer = document.getElementById('scenario-picker');
+  const search = document.getElementById('scenario-search');
+  if (!layer) return;
+  layer.hidden = false;
+  document.body.classList.add('picker-open');
+  if (search) {
+    search.value = '';
+    renderPickList();
+    setTimeout(() => search.focus(), 0);
+  }
+  loadScripts().catch(() => {});
+}
+
+function closePicker() {
+  const layer = document.getElementById('scenario-picker');
+  if (!layer || layer.hidden) return;
+  layer.hidden = true;
+  document.body.classList.remove('picker-open');
+}
+
+function setupRecordButtons() {
+  const free = document.getElementById('rec-free');
+  const fromScript = document.getElementById('rec-script');
+  const layer = document.getElementById('scenario-picker');
+  const closeBtn = document.getElementById('scenario-picker-close');
+  const search = document.getElementById('scenario-search');
+  if (free) {
+    free.addEventListener('click', () => {
+      if (window.startFreeSession) window.startFreeSession();
+    });
+  }
+  if (fromScript) fromScript.addEventListener('click', openPicker);
+  if (closeBtn) closeBtn.addEventListener('click', closePicker);
+  if (layer) {
+    layer.addEventListener('click', (event) => {
+      if (event.target === layer) closePicker();
+    });
+  }
+  if (search) search.addEventListener('input', renderPickList);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && layer && !layer.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closePicker();
+    }
+  }, true);
+}
+
 setupThemeToggle();
+setupRecordButtons();
 loadScripts().then(() => {
   const openPath = new URLSearchParams(location.search).get('script');
   if (openPath) {

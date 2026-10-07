@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>سناریوهای ریل استودیو</title>
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/style.css?v=11" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -35,11 +35,15 @@
 <div class="sub-page">
   <a href="/" class="back-btn">بازگشت</a>
   <h1>سناریوها</h1>
-  <p class="page-lead">سناریوهای ذخیره‌شده اینجاست. روی هر کدوم بزن تا صفحه‌ی ضبط باز بشه. «ویرایش» همون صفحهٔ نوشتن رو باز می‌کنه.</p>
+  <p class="page-lead">سناریوهای ذخیره‌شده اینجاست. «ضبط» صفحهٔ ضبط همون سناریو رو باز می‌کنه. «ویرایش» همون صفحهٔ نوشتن رو باز می‌کنه. کارت تموم شد؟ «اتمام و آرشیو» رو بزن تا بره تب آرشیو.</p>
+  <div class="settings-tabs list-tabs" role="tablist">
+    <button type="button" class="on" data-list-tab="list" role="tab">لیست</button>
+    <button type="button" data-list-tab="archive" role="tab">آرشیو</button>
+  </div>
   <p id="scenarios-status" class="page-lead"></p>
   <div id="scenarios-list" class="archive-list"></div>
 </div>
 <script src="/shell.js"></script>
-<script src="/scenarios.js"></script>
+<script src="/scenarios.js?v=2"></script>
 </body>
 </html>
