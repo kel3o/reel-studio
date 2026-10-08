@@ -21,6 +21,8 @@ const {
   stackFilter,
   evenDim,
   resolveFont,
+  readFontFace,
+  uniqueRenderName,
 } = require('./lib/captions');
 
 const ROOT = __dirname;
@@ -405,7 +407,7 @@ function ensureAudioLane(lanes) {
 
 function videoLaneCount(lanes) {
   const list = Array.isArray(lanes) ? lanes : [];
-  const count = list.filter((lane) => lane && lane.kind !== 'audio').length;
+  const count = list.filter((lane) => lane && lane.kind !== 'audio' && lane.kind !== 'text').length;
   return Math.max(1, count);
 }
 
@@ -474,8 +476,33 @@ function captionsPathFor(slug) {
   return path.join(TAKES_DIR, slug, 'captions.json');
 }
 
-function renderPathFor(slug) {
-  return path.join(OUT_DIR, slug + '-caption.mp4');
+function renderNames(slug) {
+  if (!slug || !fs.existsSync(OUT_DIR)) return [];
+  const prefix = slug + '-caption';
+  return fs.readdirSync(OUT_DIR).filter((name) => {
+    if (!name.startsWith(prefix) || !name.toLowerCase().endsWith('.mp4')) return false;
+    const rest = name.slice(prefix.length);
+    return rest === '.mp4' || rest.charAt(0) === '-';
+  });
+}
+
+function latestRenderPath(slug) {
+  const names = renderNames(slug);
+  if (!names.length) return '';
+  names.sort(
+    (a, b) => fs.statSync(path.join(OUT_DIR, b)).mtimeMs - fs.statSync(path.join(OUT_DIR, a)).mtimeMs
+  );
+  return path.join(OUT_DIR, names[0]);
+}
+
+function renderPathFor(slug, fileName) {
+  if (!fileName) return latestRenderPath(slug);
+  const base = path.basename(String(fileName));
+  const prefix = slug + '-caption';
+  if (!base.startsWith(prefix) || !base.toLowerCase().endsWith('.mp4')) return '';
+  const rest = base.slice(prefix.length);
+  if (rest !== '.mp4' && rest.charAt(0) !== '-') return '';
+  return path.join(OUT_DIR, base);
 }
 
 function readJsonFile(filePath) {
@@ -534,9 +561,119 @@ function defaultVideoLanes(cameras) {
       band: index,
       bands: cameras.length,
       file: '',
+      weight: 1,
+      panY: 0.5,
     }));
   }
-  return [{ id: 'main', label: 'ویدیو', kind: 'full', band: 0, bands: 1, file: '' }];
+  return [{ id: 'main', label: 'ویدیو', kind: 'full', band: 0, bands: 1, file: '', weight: 1, panY: 0.5 }];
+}
+
+function isTakeAudioFileName(file) {
+  return /^[0-9]{2}-[0-9]{1,4}-a\.webm$/i.test(String(file || ''));
+}
+
+function isTakeVideoFileName(file) {
+  return /^[0-9]{2}-[0-9]{1,4}\.webm$/i.test(String(file || ''));
+}
+
+function repairCaptionsDocument(doc, session) {
+  if (!doc || typeof doc !== 'object') return doc;
+  const cameras = Array.isArray(session && session.cameras)
+    ? session.cameras.slice()
+    : Array.isArray(doc.cameras)
+      ? doc.cameras.slice()
+      : [];
+  if (cameras.length) doc.cameras = cameras;
+  const clips = Array.isArray(doc.clips) ? doc.clips : [];
+  clips.forEach((clip) => {
+    if (!clip || !isTakeAudioFileName(clip.file)) return;
+    if (clip.lane === 'audio') return;
+    clip.lane = 'audio';
+    clip.camera = 'audio';
+    if (clip.volume == null || Number(clip.volume) < 0.01) clip.volume = 1;
+  });
+  clips.forEach((clip) => {
+    if (!clip || !isTakeAudioFileName(clip.file) || clip.lane !== 'audio') return;
+    const videoName = String(clip.file).replace(/-a\.webm$/i, '.webm');
+    if (!isTakeVideoFileName(videoName)) return;
+    const savedBands = (Array.isArray(doc.lanes) ? doc.lanes : []).filter((lane) => lane && lane.kind === 'band');
+    const bandLanes = savedBands.length
+      ? savedBands
+      : !doc.lanesTouched && cameras.length > 1
+        ? defaultVideoLanes(cameras)
+        : [];
+    const targets = bandLanes.filter((lane) => lane.kind === 'band');
+    targets.forEach((lane) => {
+      const exists = clips.some(
+        (item) =>
+          item &&
+          item.lane === lane.id &&
+          !isTakeAudioFileName(item.file) &&
+          item.file === videoName &&
+          Number(item.paragraph) === Number(clip.paragraph)
+      );
+      if (exists) return;
+      clips.push({
+        file: videoName,
+        paragraph: Number(clip.paragraph),
+        start: Number(clip.start) || 0,
+        duration: Number(clip.duration) || 0,
+        srcIn: Number(clip.srcIn) || 0,
+        srcSpan: Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || 0,
+        speed: Number(clip.speed) > 0 ? Number(clip.speed) : 1,
+        volume: 0,
+        camera: lane.id,
+        lane: lane.id,
+      });
+    });
+  });
+  if (cameras.length > 1 && !doc.lanesTouched) {
+    const defaults = defaultVideoLanes(cameras);
+    const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
+    const keep = lanes.filter((lane) => lane && (lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file'));
+    const existingBands = lanes.filter((lane) => lane && lane.kind === 'band');
+    if (!existingBands.length) {
+      doc.lanes = defaults.concat(keep);
+    }
+    const bandIds = new Set((Array.isArray(doc.lanes) ? doc.lanes : []).filter((lane) => lane && lane.kind === 'band').map((lane) => lane.id));
+    const seeds = [];
+    clips.forEach((clip) => {
+      if (!clip || clip.lane === 'audio' || isTakeAudioFileName(clip.file)) return;
+      if (!bandIds.has(clip.lane) && clip.lane !== 'main') return;
+      const key = String(clip.paragraph) + ':' + round3(Number(clip.start) || 0);
+      if (!seeds.some((seed) => String(seed.paragraph) + ':' + round3(Number(seed.start) || 0) === key)) {
+        seeds.push(clip);
+      }
+    });
+    const liveBands = (Array.isArray(doc.lanes) ? doc.lanes : []).filter((lane) => lane && lane.kind === 'band');
+    liveBands.forEach((lane) => {
+      seeds.forEach((seed) => {
+        const key = String(seed.paragraph) + ':' + round3(Number(seed.start) || 0);
+        const exists = clips.some(
+          (clip) =>
+            clip &&
+            clip.lane === lane.id &&
+            !isTakeAudioFileName(clip.file) &&
+            String(clip.paragraph) + ':' + round3(Number(clip.start) || 0) === key
+        );
+        if (exists) return;
+        clips.push({
+          file: seed.file,
+          paragraph: Number(seed.paragraph),
+          start: Number(seed.start) || 0,
+          duration: Number(seed.duration) || 0,
+          srcIn: Number(seed.srcIn) || 0,
+          srcSpan: Number(seed.srcSpan) > 0 ? Number(seed.srcSpan) : Number(seed.duration) || 0,
+          speed: Number(seed.speed) > 0 ? Number(seed.speed) : 1,
+          volume: 0,
+          camera: lane.id,
+          lane: lane.id,
+        });
+      });
+    });
+  }
+  doc.clips = clips;
+  return doc;
 }
 
 async function loadOrBuildCaptions(slug, force, durationMap) {
@@ -563,7 +700,13 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     (existing.audioMigrated || existing.clips.some((clip) => clip && clip.lane === 'audio'));
   if (existing && existingKey === key && !force && audioReady) {
     if (!existing.title) existing.title = titleForSlug(slug, session);
-    return existing;
+    const before = JSON.stringify(existing);
+    const repaired = repairCaptionsDocument(existing, session);
+    if (JSON.stringify(repaired) !== before) {
+      repaired.updatedAt = new Date().toISOString();
+      writeCaptions(slug, repaired);
+    }
+    return repaired;
   }
   if (existing && existingKey === key && !force) {
     const lanes = ensureAudioLane(sanitizeLanes(existing.lanes || defaultVideoLanes(session.cameras || [])));
@@ -597,8 +740,9 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     existing.audioMigrated = clips.some((clip) => clip && clip.lane === 'audio');
     existing.updatedAt = new Date().toISOString();
     if (!existing.title) existing.title = titleForSlug(slug, session);
-    writeCaptions(slug, existing);
-    return existing;
+    const repaired = repairCaptionsDocument(existing, session);
+    writeCaptions(slug, repaired);
+    return repaired;
   }
   let cursor = 0;
   const videoClips = [];
@@ -634,6 +778,7 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
       start,
       duration: dur,
       text: String(item.text || ''),
+      wordTimings: Array.isArray(item.wordTimings) ? item.wordTimings : null,
     });
     const audioFile = await ensureTakeAudio(slug, item.accepted, item.acceptedAudio);
     if (audioFile) {
@@ -662,8 +807,9 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     audioMigrated: audioClips.length > 0,
     updatedAt: new Date().toISOString(),
   };
-  writeCaptions(slug, doc);
-  return doc;
+  const repaired = repairCaptionsDocument(doc, session);
+  writeCaptions(slug, repaired);
+  return repaired;
 }
 
 function saveCaptionEdits(slug, body) {
@@ -682,7 +828,7 @@ function saveCaptionEdits(slug, body) {
   });
   const clips = normalizeSavedClips(existing.clips, body.clips, extraFiles);
   const words = sanitizeWords(body.words, clips);
-  if (!words.length && !existing.free) throw fail(400, 'کلمه‌ای برای زیرنویس نمانده');
+  const textLaneVisible = body.textLaneVisible !== false;
   const doc = {
     slug,
     title: existing.title || titleForSlug(slug, null),
@@ -691,7 +837,9 @@ function saveCaptionEdits(slug, body) {
     cameras: Array.isArray(existing.cameras) ? existing.cameras.slice() : [],
     lanes,
     clips,
-    words,
+    words: textLaneVisible ? words : [],
+    textLaneVisible,
+    lanesTouched: typeof body.lanesTouched === 'boolean' ? body.lanesTouched : !!existing.lanesTouched,
     audioMigrated: Boolean(existing.audioMigrated || clips.some((clip) => clip && clip.lane === 'audio')),
     updatedAt: new Date().toISOString(),
   };
@@ -731,7 +879,7 @@ function listArchive() {
         acceptedCount: accepted.length,
         paragraphCount: paragraphs.length,
         duration,
-        hasRender: fs.existsSync(renderPathFor(slug)),
+        hasRender: renderNames(slug).length > 0,
       };
     })
     .filter(Boolean);
@@ -744,12 +892,41 @@ function deleteRecording(slug) {
   const dir = path.resolve(TAKES_DIR, slug);
   if (!isInsideDir(TAKES_DIR, dir)) throw fail(403, 'این مسیر مجاز نیست');
   fs.rmSync(dir, { recursive: true, force: true });
-  const rendered = path.resolve(renderPathFor(slug));
-  if (isInsideDir(OUT_DIR, rendered) && fs.existsSync(rendered)) fs.rmSync(rendered, { force: true });
+  renderNames(slug).forEach((name) => {
+    const rendered = path.resolve(OUT_DIR, name);
+    if (isInsideDir(OUT_DIR, rendered) && fs.existsSync(rendered)) fs.rmSync(rendered, { force: true });
+  });
   if (readArchived().recordings.includes(slug)) setArchived('recording', slug, false);
 }
 
-async function burnCaptions(slug, metrics) {
+function cleanOverlays(list) {
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach((item) => {
+    if (!item || typeof item.png !== 'string' || !item.png) return;
+    const x = Math.round(Number(item.x));
+    const y = Math.round(Number(item.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const ranges = (Array.isArray(item.ranges) ? item.ranges : [])
+      .map((range) => ({ start: Number(range && range.start), end: Number(range && range.end) }))
+      .filter((range) => Number.isFinite(range.start) && range.end > range.start);
+    if (!ranges.length) return;
+    out.push({ x, y, png: item.png, ranges });
+  });
+  if (out.length > 400) throw fail(400, 'زیرنویس خیلی تکه‌تکه است');
+  return out;
+}
+
+function writeOverlayPng(dir, index, raw) {
+  const text = String(raw).replace(/^data:image\/png;base64,/, '');
+  const buf = Buffer.from(text, 'base64');
+  if (buf.length < 24 || buf[0] !== 0x89 || buf[1] !== 0x50) throw fail(400, 'تصویر زیرنویس ساخته نشد');
+  if (buf.length > 8 * 1024 * 1024) throw fail(400, 'تصویر زیرنویس خیلی بزرگ است');
+  const file = path.join(dir, String(index) + '.png');
+  fs.writeFileSync(file, buf);
+  return file;
+}
+
+async function burnCaptions(slug, metrics, overlays) {
   if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
   const doc = readCaptions(slug);
   if (!doc || !Array.isArray(doc.clips) || !doc.clips.length || !Array.isArray(doc.words)) {
@@ -759,6 +936,7 @@ async function burnCaptions(slug, metrics) {
   const style = clampStyle(doc.style);
   const font = resolveFont(style.font, PUBLIC_DIR) || resolveFont('vazir', PUBLIC_DIR);
   if (!font) throw fail(500, 'فونت زیرنویس پیدا نشد');
+  const face = readFontFace(font.file);
   const metas = [];
   for (let i = 0; i < doc.clips.length; i++) {
     const clip = doc.clips[i];
@@ -773,16 +951,22 @@ async function burnCaptions(slug, metrics) {
     const srcSpan = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || info.duration;
     const volume = clip.volume == null ? 1 : Number(clip.volume);
     const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
-    const videoLanes = lanes.filter((item) => item && item.kind !== 'audio');
+    const videoLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text');
     const lane = lanes.find((item) => item.id === clip.lane) || null;
     const isAudioLane = !!(lane && lane.kind === 'audio');
+    const isTextLane = !!(lane && lane.kind === 'text');
     const keepsSound = !!(lane && lane.kind === 'file' && lane.withAudio && info.audio);
-    const videoLaneIndex = isAudioLane
-      ? -1
-      : Math.max(
-          0,
-          videoLanes.findIndex((item) => item.id === (lane ? lane.id : videoLanes[0] && videoLanes[0].id))
-        );
+    const videoLaneIndex =
+      isAudioLane || isTextLane
+        ? -1
+        : Math.max(
+            0,
+            videoLanes.findIndex((item) => item.id === (lane ? lane.id : videoLanes[0] && videoLanes[0].id))
+          );
+    let panX = lane ? Number(lane.panX) : 0.5;
+    if (!Number.isFinite(panX)) panX = 0.5;
+    let panY = lane ? Number(lane.panY) : 0.5;
+    if (!Number.isFinite(panY)) panY = 0.5;
     metas.push({
       filePath,
       duration: Number(clip.duration) || info.duration,
@@ -797,41 +981,55 @@ async function burnCaptions(slug, metrics) {
       laneIndex: videoLaneIndex,
       cropBands: lane && lane.kind === 'band' ? lane.bands : 0,
       cropBand: lane && lane.kind === 'band' ? lane.band : 0,
+      panX: Math.min(1, Math.max(0, panX)),
+      panY: Math.min(1, Math.max(0, panY)),
+      zoom: lane ? Math.min(6, Math.max(1, Number(lane.zoom) || 1)) : 1,
       useAudio: isAudioLane || keepsSound,
       audioOnly: isAudioLane || (!info.video && !!info.audio),
     });
   }
-  if (!metas.some((meta) => meta.useAudio)) {
-    const primaryIndex = 0;
-    metas.forEach((meta) => {
-      if (meta.audioOnly || !meta.audio) return;
-      if (Number(meta.laneIndex) !== primaryIndex) return;
-      meta.useAudio = true;
-      meta.volume = 1;
-    });
-  }
+  // Do not unmute studio camera/band video just because no audio lane clip remains.
   const visualMetas = metas.filter((meta) => !meta.audioOnly && meta.video !== false && Number(meta.laneIndex) >= 0);
   const sizeSource = visualMetas[0] || metas.find((meta) => meta.info && meta.info.width) || metas[0];
   const width = evenDim(sizeSource.info.width);
   const height = evenDim(sizeSource.info.height);
   if (width < 2 || height < 2) throw fail(500, 'اندازه‌ی ویدیو خوانده نشد');
+  const sheet = cleanOverlays(overlays);
+  const useSheet = sheet.length > 0;
   const assPath = path.join(TAKES_DIR, slug, 'captions.ass');
-  fs.writeFileSync(assPath, '\uFEFF' + buildAss(doc, width, height, font.name, metrics), 'utf8');
-  const fontDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-font-'));
+  if (!useSheet) {
+    fs.writeFileSync(
+      assPath,
+      '\uFEFF' + buildAss(doc, width, height, face.family || font.name, metrics, face.bold),
+      'utf8'
+    );
+  }
+  const fontDir = useSheet ? '' : fs.mkdtempSync(path.join(os.tmpdir(), 'reel-font-'));
+  const sheetDir = useSheet ? fs.mkdtempSync(path.join(os.tmpdir(), 'reel-cap-')) : '';
   try {
-    fs.copyFileSync(font.file, path.join(fontDir, path.basename(font.file)));
+    const sheetFiles = useSheet ? sheet.map((item, index) => writeOverlayPng(sheetDir, index, item.png)) : [];
+    if (!useSheet) fs.copyFileSync(font.file, path.join(fontDir, path.basename(font.file)));
     fs.mkdirSync(OUT_DIR, { recursive: true });
-    const outFile = renderPathFor(slug);
+    const outFile = path.join(OUT_DIR, uniqueRenderName(renderNames(slug), slug, new Date()));
     const args = ['-y', '-hide_banner'];
     metas.forEach((meta) => {
       args.push('-i', meta.filePath);
     });
+    sheetFiles.forEach((file) => {
+      args.push('-loop', '1', '-i', file);
+    });
     const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
     const vCount = videoLaneCount(lanes);
+    const visualLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text');
+    const laneWeights = visualLanes.map((item) => {
+      const w = Number(item.weight);
+      return Number.isFinite(w) && w > 0.02 ? w : 1;
+    });
+    const bandCrop = visualLanes.some((item) => item && item.kind === 'band' && Number(item.bands) > 1);
     const filter =
-      vCount > 1
-        ? stackFilter(metas, width, height, vCount, assPath, fontDir)
-        : concatFilter(metas, width, height, assPath, fontDir);
+      vCount > 1 || bandCrop
+        ? stackFilter(metas, width, height, vCount, assPath, fontDir, laneWeights, useSheet ? sheet : null, metas.length)
+        : concatFilter(metas, width, height, assPath, fontDir, useSheet ? sheet : null, metas.length);
     args.push(
       '-filter_complex',
       filter,
@@ -858,7 +1056,8 @@ async function burnCaptions(slug, metrics) {
     await runProcess(FFMPEG, args);
     return { ok: true, file: path.basename(outFile) };
   } finally {
-    fs.rmSync(fontDir, { recursive: true, force: true });
+    if (fontDir) fs.rmSync(fontDir, { recursive: true, force: true });
+    if (sheetDir) fs.rmSync(sheetDir, { recursive: true, force: true });
   }
 }
 
@@ -1117,8 +1316,8 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, { error: 'اسم سناریو لازم است' });
       return;
     }
-    const filePath = path.resolve(renderPathFor(slug));
-    if (!isInsideDir(OUT_DIR, filePath) || !fs.existsSync(filePath)) {
+    const filePath = path.resolve(renderPathFor(slug, parsed.searchParams.get('file')));
+    if (!filePath || !isInsideDir(OUT_DIR, filePath) || !fs.existsSync(filePath)) {
       sendJson(res, 404, { error: 'هنوز فایلی ساخته نشده' });
       return;
     }
@@ -1244,7 +1443,7 @@ const server = http.createServer((req, res) => {
       sendJson(res, 404, { error: 'زیرنویسی ذخیره نشده' });
       return;
     }
-    sendJson(res, 200, Object.assign({}, doc, { hasRender: fs.existsSync(renderPathFor(slug)) }));
+    sendJson(res, 200, Object.assign({}, doc, { hasRender: renderNames(slug).length > 0 }));
     return;
   }
 
@@ -1299,15 +1498,18 @@ const server = http.createServer((req, res) => {
     readRawBody(req)
       .then((buffer) => {
         let metrics = null;
+        let overlays = null;
         if (buffer.length) {
           try {
             const body = JSON.parse(buffer.toString('utf8'));
+            if (body && Array.isArray(body.overlays)) overlays = body.overlays;
             if (body && (Array.isArray(body.widths) || Number(body.space) > 0)) metrics = body;
           } catch (err) {
             metrics = null;
+            overlays = null;
           }
         }
-        return burnCaptions(slug, metrics);
+        return burnCaptions(slug, metrics, overlays);
       })
       .then((result) => sendJson(res, 200, result))
       .catch((err) => sendJson(res, err.status || 500, { error: err.message }));
@@ -1320,8 +1522,8 @@ const server = http.createServer((req, res) => {
       sendJson(res, 400, { error: 'اسم سناریو لازم است' });
       return;
     }
-    const filePath = path.resolve(renderPathFor(slug));
-    if (!isInsideDir(OUT_DIR, filePath)) {
+    const filePath = path.resolve(renderPathFor(slug, parsed.searchParams.get('file')));
+    if (!filePath || !isInsideDir(OUT_DIR, filePath)) {
       sendJson(res, 403, { error: 'این مسیر مجاز نیست' });
       return;
     }

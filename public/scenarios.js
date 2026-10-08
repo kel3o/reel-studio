@@ -11,12 +11,15 @@
   let tab = new URLSearchParams(location.search).get('tab') === 'archive' ? 'archive' : 'list';
 
   function faNum(n) {
-    return String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
+    return String(n).replace(/[0-9\u0660-\u0669]/g, (ch) => {
+      const d = ch >= '0' && ch <= '9' ? ch.charCodeAt(0) - 48 : ch.charCodeAt(0) - 0x0660;
+      return FA_DIGITS[d] || ch;
+    });
   }
 
   function formatDate(ms) {
     try {
-      return new Date(ms).toLocaleDateString('fa-IR');
+      return faNum(new Date(ms).toLocaleDateString('fa-IR'));
     } catch (e) {
       return '';
     }

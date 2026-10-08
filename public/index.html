@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ریل استودیو</title>
-<link rel="stylesheet" href="/style.css?v=11" />
+<link rel="stylesheet" href="/style.css?v=18" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -148,6 +148,9 @@
           <button id="tp-mirror" type="button" class="tp-icon-btn" title="آینه" aria-label="آینه">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4 20h3.2l1.5-3.5h6.6L16.8 20H20L12 2zm0 5.8 2.5 6.2h-5L12 7.8z"/></svg>
           </button>
+          <button id="tp-yellow" type="button" class="tp-icon-btn tp-only" title="کلمه زرد خاموش" aria-label="کلمه زرد" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6h16v3H4V6zm2 5h12v8H6v-8zm3 2v4h6v-4H9z"/></svg>
+          </button>
           <button id="tp-open-folder" type="button" class="tp-icon-btn" title="پوشه" aria-label="پوشه">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
           </button>
@@ -182,7 +185,7 @@
         <p>
           <kbd>فاصله</kbd> شروع و توقف ضبط
           <kbd>R</kbd> دوباره‌ضبط
-          <kbd>Enter</kbd> <span class="tp-only">قبول و بعدی</span><span class="free-only">قبول و رفتن به ادیت</span>
+          <kbd>Enter</kbd> <span class="tp-only">قبول و بعدی، آخرین تکه می‌ره ادیت</span><span class="free-only">قبول و رفتن به ادیت</span>
           <span class="tp-only"><kbd>بالا</kbd><kbd>پایین</kbd> سرعت اسکرول</span>
           <span class="tp-only"><kbd>چپ</kbd><kbd>راست</kbd> اندازه‌ی متن</span>
           <kbd>Esc</kbd> بستن
@@ -262,9 +265,22 @@
     </section>
   </div>
 </div>
-<script src="/phone-studio.js?v=13"></script>
-<script src="/devices.js?v=13"></script>
-<script src="/capture.js?v=6"></script>
+<div id="rec-browse" class="rec-browse" hidden>
+  <iframe id="rec-browse-frame" title="صفحه"></iframe>
+</div>
+<div id="rec-float" class="rec-float">
+  <canvas id="rec-float-preview" class="rec-float-preview" width="160" height="214"></canvas>
+  <div class="rec-float-actions">
+    <button id="rec-float-start" type="button">شروع ضبط</button>
+    <button id="rec-float-stop" type="button" hidden>توقف</button>
+    <button id="rec-float-pause" type="button" hidden>توقف کوتاه</button>
+    <button id="rec-float-resume" type="button" hidden>شروع مجدد</button>
+  </div>
+</div>
+<script src="/phone-studio.js?v=15"></script>
+<script src="/devices.js?v=15"></script>
+<script src="/capture.js?v=11"></script>
+<script src="/rec-shortcut.js?v=1"></script>
 <script src="/app.js?v=2"></script>
 <script src="/shell.js"></script>
 </body>

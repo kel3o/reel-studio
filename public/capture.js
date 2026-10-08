@@ -4,7 +4,7 @@
     title: '',
     paragraphs: [],
     current: 0,
-    phase: 'idle', // idle | ready | countdown | recording | review | done
+    phase: 'idle', // idle | ready | countdown | recording | paused | review | done
     mediaRecorder: null,
     audioRecorder: null,
     chunks: [],
@@ -40,15 +40,35 @@
   const veilCloseBtn = document.getElementById('tp-veil-close');
   const veilGoBtn = document.getElementById('tp-go');
   const recordBtn = document.getElementById('tp-record');
+  const floatBox = document.getElementById('rec-float');
+  const floatPreview = document.getElementById('rec-float-preview');
+  const floatStartBtn = document.getElementById('rec-float-start');
+  const floatStopBtn = document.getElementById('rec-float-stop');
+  const floatPauseBtn = document.getElementById('rec-float-pause');
+  const floatResumeBtn = document.getElementById('rec-float-resume');
+  const browseLayer = document.getElementById('rec-browse');
+  const browseFrame = document.getElementById('rec-browse-frame');
   const retakeBtn = document.getElementById('tp-retake');
   const acceptBtn = document.getElementById('tp-accept');
   const captionLink = document.getElementById('tp-captions');
+  const yellowBtn = document.getElementById('tp-yellow');
   let captionBuildKey = '';
   let accepting = false;
+  let yellowWords = false;
+  let yellowIndex = -1;
+  let yellowSchedule = [];
+  let recordedWordTimings = [];
 
   const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  function faDigits(value) {
+    return String(value == null ? '' : value).replace(/[0-9\u0660-\u0669]/g, (ch) => {
+      const n = ch >= '0' && ch <= '9' ? ch.charCodeAt(0) - 48 : ch.charCodeAt(0) - 0x0660;
+      return FA_DIGITS[n] || ch;
+    });
+  }
+
   function faNum(n) {
-    return String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
+    return faDigits(n);
   }
 
   function escapeHtml(s) {
@@ -74,7 +94,7 @@
           return;
         }
         wordIndex += 1;
-        const text = escapeHtml(token);
+        const text = escapeHtml(faDigits(token).replace(/\[([1-6])\]/g, ''));
         if (emphasis.includes(wordIndex)) {
           const color = colors[wordIndex] || 1;
           parts.push('<b class="tp-w tp-em tp-em-' + color + '">' + text + '</b>');
@@ -89,6 +109,69 @@
   function currentParagraphHtml() {
     const p = state.paragraphs[state.current];
     return p ? paragraphHtml(p) : '';
+  }
+
+  function spokenTokenList(p) {
+    const source = String((p && p.text) || '').replace(/\r\n/g, '\n');
+    const out = [];
+    source.split(/\s+/).forEach((token) => {
+      if (!token || token === '⏸') return;
+      out.push(token.replace(/^\[([1-6])\]/, ''));
+    });
+    return out;
+  }
+
+  function buildYellowSchedule(p, pace) {
+    const tokens = spokenTokenList(p);
+    const charSec = 0.055 / Math.max(0.5, pace / 3);
+    let t = 0;
+    return tokens.map((text) => {
+      const dur = Math.max(0.08, Math.max(1, text.length) * charSec);
+      const start = t;
+      t += dur;
+      return { text, start, end: t };
+    });
+  }
+
+  function setYellowWords(on) {
+    yellowWords = !!on;
+    if (yellowBtn) {
+      yellowBtn.classList.toggle('on', yellowWords);
+      yellowBtn.setAttribute('aria-pressed', yellowWords ? 'true' : 'false');
+      yellowBtn.title = yellowWords ? 'کلمه زرد روشن' : 'کلمه زرد خاموش';
+    }
+    try {
+      localStorage.setItem('reel.tpWord', yellowWords ? '1' : '0');
+    } catch (err) {}
+    if (!yellowWords) {
+      textEl.querySelectorAll('.tp-w.tp-word-on').forEach((el) => el.classList.remove('tp-word-on'));
+      yellowIndex = -1;
+    }
+    pushTeleprompter({ yellowWords: yellowWords, yellowIndex: yellowIndex });
+  }
+
+  function markYellowWord(index) {
+    const current = textEl.querySelector('.tp-paragraph.tp-current');
+    clearReadingMarks();
+    textEl.querySelectorAll('.tp-w.tp-word-on').forEach((el) => el.classList.remove('tp-word-on'));
+    if (!current || !yellowWords) return null;
+    const words = current.querySelectorAll('.tp-w');
+    if (!words.length || index < 0 || index >= words.length) return null;
+    const word = words[index];
+    word.classList.add('tp-word-on');
+    return word;
+  }
+
+  function followYellowWord(word) {
+    if (!word || !stage) return;
+    const stageRect = stage.getBoundingClientRect();
+    const eyeY = stageRect.top + stageRect.height * 0.22;
+    const rect = word.getBoundingClientRect();
+    const mid = (rect.top + rect.bottom) / 2;
+    const delta = mid - eyeY;
+    if (Math.abs(delta) < 4) return;
+    scrollPos = Math.max(0, scrollPos + delta);
+    stage.scrollTop = scrollPos;
   }
 
   function pushTeleprompter(extra) {
@@ -106,6 +189,8 @@
         lineHeight: lineHeight,
         scrollPos: scrollPos,
         phase: state.phase,
+        yellowWords: yellowWords,
+        yellowIndex: yellowIndex,
       },
       extra || {}
     );
@@ -117,19 +202,22 @@
     api.sendTeleprompter(payload);
   }
 
-  function markActiveLine() {
-    const current = textEl.querySelector('.tp-paragraph.tp-current');
+  function clearReadingMarks() {
     textEl.querySelectorAll('.tp-w.tp-line-on').forEach((el) => el.classList.remove('tp-line-on'));
-    if (!current) return;
+  }
+
+  function wordAtEye() {
+    const current = textEl.querySelector('.tp-paragraph.tp-current');
+    if (!current) return null;
     const words = current.querySelectorAll('.tp-w');
-    if (!words.length) return;
+    if (!words.length) return null;
     const stageRect = stage.getBoundingClientRect();
     const eyeY = stageRect.top + stageRect.height * 0.22;
     let best = null;
     let bestDist = Infinity;
     words.forEach((word) => {
       const rect = word.getBoundingClientRect();
-      if (rect.bottom < stageRect.top || rect.top > stageRect.bottom) return;
+      if (rect.bottom < stageRect.top - 8 || rect.top > stageRect.bottom + 8) return;
       const mid = (rect.top + rect.bottom) / 2;
       const dist = Math.abs(mid - eyeY);
       if (dist < bestDist) {
@@ -137,11 +225,40 @@
         best = word;
       }
     });
-    if (!best) return;
-    const lineTop = best.offsetTop;
-    words.forEach((word) => {
-      if (Math.abs(word.offsetTop - lineTop) <= 1) word.classList.add('tp-line-on');
-    });
+    return best;
+  }
+
+  function markActiveLine() {
+    clearReadingMarks();
+    if (!yellowWords) {
+      textEl.querySelectorAll('.tp-w.tp-word-on').forEach((el) => el.classList.remove('tp-word-on'));
+      return;
+    }
+    if (state.phase === 'recording') return;
+    const best = wordAtEye();
+    textEl.querySelectorAll('.tp-w.tp-word-on').forEach((el) => el.classList.remove('tp-word-on'));
+    if (best) best.classList.add('tp-word-on');
+  }
+
+  function tickYellowWords(elapsed) {
+    clearReadingMarks();
+    if (!yellowWords || state.phase !== 'recording') return;
+    if (!yellowSchedule.length) return;
+    let next = yellowSchedule.length - 1;
+    for (let i = 0; i < yellowSchedule.length; i++) {
+      if (elapsed < yellowSchedule[i].end) {
+        next = i;
+        break;
+      }
+    }
+    if (next !== yellowIndex) {
+      yellowIndex = next;
+      const word = markYellowWord(yellowIndex);
+      followYellowWord(word);
+      pushTeleprompter({ yellowIndex: yellowIndex, yellowWords: true });
+    } else {
+      markYellowWord(yellowIndex);
+    }
   }
 
   let speed = 3;
@@ -154,6 +271,9 @@
   let lastFrameTs = 0;
   let recordStartTs = 0;
   let clockSeconds = 0;
+  let finishToEditor = false;
+  let browseOpen = false;
+  let historyHeld = false;
 
   function setStatus(text) {
     statusEl.textContent = text;
@@ -178,11 +298,117 @@
       setRecordLabel('توقف');
       recordBtn.disabled = false;
       recordBtn.classList.add('on');
+    } else if (state.phase === 'paused') {
+      setRecordLabel('ادامه');
+      recordBtn.disabled = false;
+      recordBtn.classList.add('on');
     } else if (state.phase === 'countdown') {
       recordBtn.disabled = true;
       recordBtn.classList.remove('on');
     }
+    const lastTake = state.free || !state.paragraphs.length || state.current >= state.paragraphs.length - 1;
+    acceptBtn.title = lastTake ? 'قبول و رفتن به ادیت' : 'قبول و بعدی';
     syncCaptionLink();
+    syncFloat();
+  }
+
+  function recordingLive() {
+    return state.phase === 'recording' || state.phase === 'paused';
+  }
+
+  function holdHistory() {
+    if (historyHeld) return;
+    historyHeld = true;
+    history.pushState({ reelHold: 1 }, '');
+  }
+
+  function syncFloat() {
+    if (!floatBox) return;
+    const recording = state.phase === 'recording';
+    const paused = state.phase === 'paused';
+    const counting = state.phase === 'countdown';
+    floatBox.classList.toggle('is-paused', paused);
+    if (floatStartBtn) {
+      floatStartBtn.hidden = recording || paused;
+      floatStartBtn.disabled = counting;
+      if (!counting) floatStartBtn.textContent = 'شروع ضبط';
+    }
+    if (floatStopBtn) floatStopBtn.hidden = !recording && !paused;
+    if (floatPauseBtn) floatPauseBtn.hidden = !recording;
+    if (floatResumeBtn) floatResumeBtn.hidden = !paused;
+  }
+
+  function setFloatCount(n) {
+    if (!floatStartBtn) return;
+    floatStartBtn.hidden = false;
+    floatStartBtn.disabled = true;
+    floatStartBtn.textContent = faNum(n);
+  }
+
+  function paintFloatPreview() {
+    const canvas = floatPreview;
+    const src = document.getElementById('preview');
+    if (canvas && canvas.getContext && src && src.readyState >= 2 && src.videoWidth && src.videoHeight) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      const scale = Math.min(w / src.videoWidth, h / src.videoHeight);
+      const dw = src.videoWidth * scale;
+      const dh = src.videoHeight * scale;
+      ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    }
+    requestAnimationFrame(paintFloatPreview);
+  }
+
+  function closeBrowse() {
+    browseOpen = false;
+    if (browseLayer) browseLayer.hidden = true;
+    if (browseFrame) browseFrame.src = 'about:blank';
+    syncFloat();
+  }
+
+  function openBrowse(path) {
+    if (!browseFrame || !browseLayer) return;
+    browseFrame.src = path;
+    browseLayer.hidden = false;
+    browseOpen = true;
+    syncFloat();
+    history.pushState({ reelBrowse: path }, '', path);
+  }
+
+  function appPath(href) {
+    let url;
+    try {
+      url = new URL(href, location.href);
+    } catch (err) {
+      return '';
+    }
+    if (url.origin !== location.origin) return '';
+    const path = url.pathname;
+    if (path === '/' || path.endsWith('/index.html')) {
+      return url.searchParams.get('settings') === '1' ? 'settings' : 'home';
+    }
+    const pages = ['/scenarios.html', '/archive.html', '/help.html', '/script.html', '/edit.html', '/phone.html'];
+    if (pages.indexOf(path) === -1) return '';
+    return path + url.search;
+  }
+
+  function showDashboard() {
+    panel.hidden = true;
+    document.body.classList.remove('tp-open');
+    syncFloat();
+  }
+
+  function showTeleprompter() {
+    if (browseOpen) {
+      if (history.state && history.state.reelBrowse) history.back();
+      else closeBrowse();
+    }
+    panel.hidden = false;
+    document.body.classList.add('tp-open');
+    syncFloat();
   }
 
   function syncCaptionLink() {
@@ -248,7 +474,7 @@
       const li = document.createElement('li');
       li.className =
         'progress-chip' + (p.accepted ? ' accepted' : '') + (i === state.current ? ' current' : '');
-      li.textContent = String(i + 1);
+      li.textContent = faNum(i + 1);
       li.addEventListener('click', () => {
         if (state.phase === 'ready' || state.phase === 'idle' || state.phase === 'done') {
           state.current = i;
@@ -305,6 +531,7 @@
     let n = 3;
     setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
     recordBtn.textContent = faNum(n);
+    setFloatCount(n);
     const interval = setInterval(() => {
       n -= 1;
       if (n <= 0) {
@@ -313,6 +540,7 @@
       } else {
         setStatus(`شروع تا ${faNum(n)} ثانیه دیگه`);
         recordBtn.textContent = faNum(n);
+        setFloatCount(n);
       }
     }, 1000);
   }
@@ -355,12 +583,20 @@
     if (liveCam.srcObject !== stream) liveCam.srcObject = stream;
     if (window.__reel && window.__reel.resetCutClock) window.__reel.resetCutClock();
     state.phase = 'recording';
+    holdHistory();
     updateRecordButton();
-    setStatus('در حال ضبط، فاصله رو بزن که تموم بشه');
+    setStatus('در حال ضبط. می‌تونی بری صفحه‌های دیگه');
     scrollPos = stage.scrollTop;
     lastFrameTs = 0;
     recordStartTs = performance.now();
     clockSeconds = 0;
+    yellowSchedule = yellowWords ? buildYellowSchedule(state.paragraphs[state.current], speed) : [];
+    yellowIndex = -1;
+    recordedWordTimings = [];
+    if (yellowSchedule.length) {
+      yellowIndex = 0;
+      markYellowWord(0);
+    }
     state.chunks = [];
     state.audioChunks = [];
     state.pendingAudioFile = null;
@@ -385,13 +621,48 @@
     pushTeleprompter({ visible: true, scrolling: true, resetScroll: true });
   }
 
-  function stopRecording() {
-    if (state.mediaRecorder && state.phase === 'recording') {
-      try {
-        if (state.audioRecorder && state.audioRecorder.state === 'recording') state.audioRecorder.stop();
-      } catch (err) {}
-      state.mediaRecorder.stop();
+  function pauseRecording() {
+    const rec = state.mediaRecorder;
+    if (state.phase !== 'recording' || !rec || rec.state !== 'recording' || typeof rec.pause !== 'function') {
+      setStatus('توقف کوتاه نشد');
+      return;
     }
+    try {
+      rec.pause();
+    } catch (err) {
+      setStatus('توقف کوتاه نشد');
+      return;
+    }
+    clockSeconds = Math.max(0, (performance.now() - recordStartTs) / 1000);
+    state.phase = 'paused';
+    updateRecordButton();
+    setStatus('توقف کوتاه');
+    pushTeleprompter({ scrolling: false });
+  }
+
+  function resumeRecording() {
+    const rec = state.mediaRecorder;
+    if (state.phase !== 'paused' || !rec || rec.state !== 'paused' || typeof rec.resume !== 'function') return;
+    try {
+      rec.resume();
+    } catch (err) {
+      setStatus('شروع مجدد نشد');
+      return;
+    }
+    recordStartTs = performance.now() - clockSeconds * 1000;
+    state.phase = 'recording';
+    updateRecordButton();
+    setStatus('ادامه ضبط');
+    pushTeleprompter({ scrolling: true });
+  }
+
+  function stopRecording(toEditor) {
+    if (!recordingLive() || !state.mediaRecorder) return;
+    finishToEditor = !!toEditor;
+    const rec = state.mediaRecorder;
+    try {
+      if (rec.state === 'recording' || rec.state === 'paused') rec.stop();
+    } catch (err) {}
   }
 
   async function uploadClip(blob, paragraphIndex, take) {
@@ -403,14 +674,51 @@
   }
 
   async function onRecordingStopped() {
+    const toEditor = finishToEditor;
+    finishToEditor = false;
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     const p = state.paragraphs[state.current];
     const take = p.takes.length + 1;
+    if (yellowWords && yellowSchedule.length) {
+      const endAt = Math.max(clockSeconds, yellowSchedule[yellowSchedule.length - 1].end);
+      recordedWordTimings = yellowSchedule.map((item) => ({
+        text: item.text,
+        start: Math.round(Math.min(item.start, endAt) * 1000) / 1000,
+        end: Math.round(Math.min(item.end, endAt) * 1000) / 1000,
+      }));
+    } else {
+      recordedWordTimings = [];
+    }
 
     const uploaded = await uploadClip(blob, p.index, take);
     const fileName = uploaded.file;
     p.takes.push(fileName);
+    p.pendingWordTimings = recordedWordTimings.slice();
     state.pendingAudioFile = uploaded.audioFile || null;
+
+    if (toEditor) {
+      p.accepted = fileName;
+      p.acceptedAudio = state.pendingAudioFile || null;
+      state.pendingAudioFile = null;
+      if (recordedWordTimings.length) p.wordTimings = recordedWordTimings.slice();
+      p.pendingWordTimings = null;
+      p.duration = clockSeconds > 0.05 ? Math.round(clockSeconds * 1000) / 1000 : null;
+      state.phase = 'done';
+      closeBrowse();
+      updateRecordButton();
+      await saveSession();
+      try {
+        const durations = {};
+        if (p.accepted && p.duration) durations[p.accepted] = p.duration;
+        await fetch('/api/captions/build?slug=' + encodeURIComponent(state.slug), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({ durations }),
+        });
+      } catch (err) {}
+      location.href = '/edit.html?slug=' + encodeURIComponent(state.slug);
+      return;
+    }
 
     reviewVideo.src = URL.createObjectURL(blob);
     reviewVideo.hidden = false;
@@ -437,6 +745,7 @@
         accepted: p.accepted,
         acceptedAudio: p.acceptedAudio || null,
         duration: p.duration || null,
+        wordTimings: Array.isArray(p.wordTimings) ? p.wordTimings : undefined,
       })),
     };
     try {
@@ -481,6 +790,10 @@
     p.accepted = p.takes[p.takes.length - 1];
     p.acceptedAudio = state.pendingAudioFile || null;
     state.pendingAudioFile = null;
+    if (Array.isArray(p.pendingWordTimings) && p.pendingWordTimings.length) {
+      p.wordTimings = p.pendingWordTimings.slice();
+    }
+    p.pendingWordTimings = null;
     try {
       p.duration = await reviewDuration();
     } catch (err) {
@@ -491,36 +804,35 @@
     reviewVideo.pause();
     await saveSession();
 
-    if (state.free) {
-      await openFreeInEditor(p);
+    const last = state.free || state.current >= state.paragraphs.length - 1;
+    if (last) {
+      await openInEditor();
       accepting = false;
       return;
     }
 
-    if (state.current < state.paragraphs.length - 1) {
-      state.current += 1;
-      state.phase = 'ready';
-      setStatus('آماده');
-      scrollPos = 0;
-      stage.scrollTop = 0;
-    } else {
-      state.phase = 'done';
-      setStatus('همه‌ی پاراگراف‌ها ضبط شد');
-    }
+    state.current += 1;
+    state.phase = 'ready';
+    setStatus('آماده');
+    scrollPos = 0;
+    stage.scrollTop = 0;
     updateRecordButton();
     renderTeleprompter();
     renderProgress();
-    if (state.phase === 'done') pushTeleprompter({ visible: false, scrolling: false });
     accepting = false;
   }
 
-  async function openFreeInEditor(p) {
+  async function openInEditor() {
     const slug = state.slug;
     state.phase = 'done';
     updateRecordButton();
     setStatus('داره ادیتور باز می‌شه');
     const durations = {};
-    if (p && p.accepted && Number(p.duration) > 0.05) durations[p.accepted] = Number(p.duration);
+    state.paragraphs.forEach((paragraph) => {
+      if (paragraph.accepted && Number(paragraph.duration) > 0.05) {
+        durations[paragraph.accepted] = Number(paragraph.duration);
+      }
+    });
     try {
       await fetch('/api/captions/build?slug=' + encodeURIComponent(slug), {
         method: 'POST',
@@ -550,7 +862,11 @@
 
   function toggleRecording() {
     if (state.phase === 'recording') {
-      stopRecording();
+      stopRecording(false);
+      return;
+    }
+    if (state.phase === 'paused') {
+      resumeRecording();
       return;
     }
     if (state.phase === 'ready') armRecording();
@@ -559,12 +875,17 @@
 
   function exitCapture() {
     if (state.phase === 'idle') return;
-    if (state.phase === 'recording' || state.phase === 'countdown') {
+    if (state.phase === 'recording' || state.phase === 'paused' || state.phase === 'countdown') {
       try {
         if (state.audioRecorder && state.audioRecorder.state === 'recording') state.audioRecorder.stop();
       } catch (err) {}
       try {
-        if (state.mediaRecorder && state.mediaRecorder.state === 'recording') state.mediaRecorder.stop();
+        const rec = state.mediaRecorder;
+        if (rec) {
+          rec.onstop = null;
+          rec.ondataavailable = null;
+          if (rec.state === 'recording' || rec.state === 'paused') rec.stop();
+        }
       } catch (err) {}
       state.mediaRecorder = null;
       state.audioRecorder = null;
@@ -600,6 +921,11 @@
     if (panel.hidden || state.phase === 'idle') return;
     if (e.key === 'Escape') {
       e.preventDefault();
+      if (recordingLive()) {
+        if (browseOpen) showTeleprompter();
+        else showDashboard();
+        return;
+      }
       exitCapture();
       return;
     }
@@ -629,8 +955,89 @@
   }
   document.addEventListener('keydown', handleKey);
 
-  closeBtn.addEventListener('click', exitCapture);
-  if (veilCloseBtn) veilCloseBtn.addEventListener('click', exitCapture);
+  closeBtn.addEventListener('click', () => {
+    if (recordingLive()) showDashboard();
+    else exitCapture();
+  });
+  if (veilCloseBtn) {
+    veilCloseBtn.addEventListener('click', () => {
+      if (recordingLive()) showDashboard();
+      else exitCapture();
+    });
+  }
+  if (floatStopBtn) {
+    floatStopBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      stopRecording(true);
+    });
+  }
+  if (floatPauseBtn) {
+    floatPauseBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pauseRecording();
+    });
+  }
+  if (floatResumeBtn) {
+    floatResumeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      resumeRecording();
+    });
+  }
+  if (floatStartBtn) {
+    floatStartBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      shortcutStart();
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (!recordingLive()) return;
+    const link = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+    if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+    const dest = appPath(link.href);
+    if (!dest) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (dest === 'home') {
+      if (window.__reelShell) window.__reelShell.closeSettings();
+      showDashboard();
+      if (browseOpen) {
+        if (history.state && history.state.reelBrowse) history.back();
+        else closeBrowse();
+      }
+      return;
+    }
+    if (dest === 'settings') {
+      if (browseOpen) {
+        if (history.state && history.state.reelBrowse) history.back();
+        else closeBrowse();
+      }
+      showDashboard();
+      if (window.__reelShell) window.__reelShell.openSettings();
+      return;
+    }
+    openBrowse(dest);
+  }, true);
+  window.addEventListener('popstate', () => {
+    if (!recordingLive()) return;
+    if (browseOpen) closeBrowse();
+    else history.pushState({ reelHold: 1 }, '');
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (!recordingLive()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin) return;
+    if (!event.data || event.data.reel !== 'close-browse') return;
+    if (!recordingLive()) return;
+    if (window.__reelShell) window.__reelShell.closeSettings();
+    showDashboard();
+    if (browseOpen) {
+      if (history.state && history.state.reelBrowse) history.back();
+      else closeBrowse();
+    }
+  });
   if (slowerBtn) slowerBtn.addEventListener('click', () => setSpeed(speed - 1));
   if (fasterBtn) fasterBtn.addEventListener('click', () => setSpeed(speed + 1));
   if (smallerBtn) smallerBtn.addEventListener('click', () => setFontSize(fontSize - 4));
@@ -695,9 +1102,13 @@
     lastFrameTs = ts;
 
     if (speed > 0 && state.phase === 'recording') {
-      scrollPos += speed * 11 * dt;
-      stage.scrollTop = scrollPos;
       clockSeconds = (performance.now() - recordStartTs) / 1000;
+      if (yellowWords) {
+        tickYellowWords(clockSeconds);
+      } else {
+        scrollPos += speed * 11 * dt;
+        stage.scrollTop = scrollPos;
+      }
     }
 
     const mm = Math.floor(clockSeconds / 60);
@@ -711,6 +1122,16 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  if (yellowBtn) {
+    try {
+      yellowWords = localStorage.getItem('reel.tpWord') !== '0';
+    } catch (err) {
+      yellowWords = true;
+    }
+    setYellowWords(yellowWords);
+    yellowBtn.addEventListener('click', () => setYellowWords(!yellowWords));
+  }
   setInterval(() => {
     if (panel.hidden || state.phase !== 'recording') return;
     pushTeleprompter();
@@ -749,6 +1170,7 @@
         accepted: prior ? prior.accepted || null : null,
         acceptedAudio: prior ? prior.acceptedAudio || null : null,
         duration: prior && Number(prior.duration) > 0 ? Number(prior.duration) : null,
+        wordTimings: prior && Array.isArray(prior.wordTimings) ? prior.wordTimings : null,
       };
     });
     const firstUnaccepted = state.paragraphs.findIndex((p) => !p.accepted);
@@ -787,10 +1209,41 @@
     );
   }
 
+  function prepareQuietFree() {
+    let date = '';
+    try {
+      date = faDigits(new Date().toLocaleDateString('fa-IR'));
+    } catch (err) {}
+    state.free = true;
+    state.slug = 'free-' + freeStamp();
+    state.title = date ? 'ضبط آزاد ' + date : 'ضبط آزاد';
+    state.paragraphs = [
+      { index: 0, text: '', emphasis: [], emphasisColors: {}, takes: [], accepted: null, acceptedAudio: null, duration: null },
+    ];
+    state.current = 0;
+    state.phase = 'ready';
+    state.pendingAudioFile = null;
+    panel.classList.add('tp-free');
+    panel.hidden = true;
+    document.body.classList.remove('tp-open');
+    veil.classList.add('tp-veil-hidden');
+    updateRecordButton();
+  }
+
+  async function shortcutStart() {
+    if (state.phase === 'recording' || state.phase === 'paused' || state.phase === 'countdown') return;
+    if (state.phase !== 'ready' || !state.slug) prepareQuietFree();
+    panel.hidden = true;
+    document.body.classList.remove('tp-open');
+    veil.classList.add('tp-veil-hidden');
+    syncFloat();
+    await armRecording();
+  }
+
   window.startFreeSession = function () {
     let date = '';
     try {
-      date = new Date().toLocaleDateString('fa-IR');
+      date = faDigits(new Date().toLocaleDateString('fa-IR'));
     } catch (err) {}
     state.free = true;
     state.slug = 'free-' + freeStamp();
@@ -818,4 +1271,11 @@
     renderTeleprompter();
     renderProgress();
   };
+
+  paintFloatPreview();
+  syncFloat();
+  if (new URLSearchParams(location.search).get('shortcut') === '1') {
+    history.replaceState(null, '', '/');
+    shortcutStart();
+  }
 })();

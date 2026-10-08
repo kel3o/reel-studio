@@ -1,4 +1,21 @@
 (function () {
+  if (window.parent && window.parent !== window) {
+    document.addEventListener('click', (event) => {
+      const link = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+      if (!link || link.target === '_blank') return;
+      let url;
+      try {
+        url = new URL(link.href, location.href);
+      } catch (err) {
+        return;
+      }
+      if (url.origin !== location.origin) return;
+      if (url.pathname !== '/' && !url.pathname.endsWith('/index.html')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.parent.postMessage({ reel: 'close-browse' }, location.origin);
+    }, true);
+  }
   const nav = document.querySelector('.site-nav');
   const layer = document.getElementById('settings-layer');
   const homeLink = document.querySelector('[data-nav="home"]');
@@ -84,6 +101,11 @@
   });
 
   if (layer && new URLSearchParams(location.search).get('settings') === '1') openSettings();
+
+  window.__reelShell = {
+    openSettings: openSettings,
+    closeSettings: closeSettings,
+  };
 
   function syncScale() {
     const current = document.documentElement.getAttribute('data-ui') || 'md';

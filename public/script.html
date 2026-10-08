@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>افزودن سناریو</title>
-<link rel="stylesheet" href="/style.css?v=11" />
+<link rel="stylesheet" href="/style.css?v=19" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -41,6 +41,7 @@
       <ul class="script-tips">
         <li>هر پاراگراف می‌شه یک تکه ضبط.</li>
         <li>برای رنگ، اول «انتخاب رنگ»، بعد تکه‌ی متن، بعد «تاکید روی انتخاب».</li>
+        <li>دایره بی‌رنگ، رنگ رو برمی‌گردونه به رنگ خود متن. تو حالت روشن مشکیِ متنه.</li>
         <li>با ثبت و ذخیره، سناریو توی فهرست می‌مونه.</li>
       </ul>
     </div>
@@ -68,6 +69,7 @@
             <button type="button" class="em-color" data-color="4" title="رنگ ۴" style="--em:#3ecf8e"></button>
             <button type="button" class="em-color" data-color="5" title="رنگ ۵" style="--em:#3ba0ff"></button>
             <button type="button" class="em-color" data-color="6" title="رنگ ۶" style="--em:#e85d8a"></button>
+            <button type="button" class="em-color em-color-plain" data-color="0" title="بی‌رنگ" aria-label="بی‌رنگ"></button>
           </div>
           <button id="em-color-toggle" type="button" class="manual-emphasize on">انتخاب رنگ</button>
         </div>
@@ -83,6 +85,7 @@
   <a href="/" class="back-btn back-btn-end">بازگشت</a>
 </div>
 <script src="/shell.js"></script>
-<script src="/script.js?v=2"></script>
+<script src="/rec-shortcut.js?v=1"></script>
+<script src="/script.js?v=6"></script>
 </body>
 </html>

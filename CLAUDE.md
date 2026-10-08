@@ -39,7 +39,7 @@ finds them. The picker still lists everything, because hardware changes.
 
 ## Phone camera stutter
 
-If phone pictures hitch about once a second and the laptop webcam does not, read the 5 October 2026 entry in `SESSIONS.md` before changing the phone video path.
+If phone pictures hitch about once a second and the laptop webcam does not, read the 5 October 2026 entry in `SESSIONS.md` before changing the phone video path. If that direct-link fix is already in place and the phone status still flips about twice a second, use the second fix in that same entry (8 October 2026): two dashboard tabs were stealing the studio socket. Do not remove `studio-replaced` or `requestDirect`.
 
 Live phone video must stay on the direct WebRTC path (`startRtc` in `public/phone.js`, `acceptOffer` in `public/phone-studio.js`, local STUN in `lib/phone-bridge.js`). Do not move it back onto the TCP WebSocket as WebCodecs or JPEG. That socket is signaling only, plus phone-mic audio when that mic is actually selected. The phone page should say «داره مستقیم فرستاده می‌شه». The other status line means the stuttery fallback is running.
 

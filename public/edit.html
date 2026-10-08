@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ویرایش زیرنویس</title>
-<link rel="stylesheet" href="/style.css?v=11" />
+<link rel="stylesheet" href="/style.css?v=19" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -43,6 +43,7 @@
         <div class="edit-frame" id="edit-frame">
           <video id="player" playsinline></video>
           <canvas id="mix-view" class="mix-view" hidden></canvas>
+          <div id="band-overlays" class="band-overlays" hidden></div>
           <div id="cap-layer" class="cap-layer">
             <div id="caption" class="caption font-vazir"></div>
             <div class="cap-box" aria-hidden="true">
@@ -59,8 +60,16 @@
         </div>
       </div>
       <div class="edit-transport">
+        <div class="edit-history" aria-label="برگشت و جلو">
+          <button id="undo-btn" type="button" class="btn btn-icon" title="برگشت (Ctrl+Z)" aria-label="برگشت" disabled>↶</button>
+          <button id="redo-btn" type="button" class="btn btn-icon" title="جلو (Ctrl+Shift+Z)" aria-label="جلو" disabled>↷</button>
+        </div>
         <button id="play-btn" type="button" class="btn btn-accent">پخش</button>
         <span id="time-readout" class="time-readout">۰:۰۰ / ۰:۰۰</span>
+        <label class="zoom-label">زوم پیش‌نمایش
+          <input id="preview-zoom" type="range" min="100" max="300" step="10" value="100" />
+          <span id="preview-zoom-out" class="opt-readout">۱۰۰</span>
+        </label>
       </div>
     </section>
 
@@ -167,7 +176,8 @@
       <div id="tl-word-tools" class="tl-toolset" hidden>
         <button id="tl-edit-word" type="button" class="btn btn-edit">ویرایش</button>
         <button id="tl-add-word" type="button" class="btn btn-add">افزودن کلمه</button>
-        <button id="tl-add-pause" type="button" class="btn">افزودن مکث</button>
+        <button id="tl-add-pause" type="button" class="btn">مکث بین زیرنویس</button>
+        <button id="tl-add-blank" type="button" class="btn">متن بدون زیرنویس</button>
         <button id="tl-delete-word" type="button" class="btn btn-danger">حذف</button>
       </div>
       </div>
@@ -215,6 +225,7 @@
   </div>
 </div>
 <script src="/shell.js"></script>
-<script src="/edit.js?v=11"></script>
+<script src="/rec-shortcut.js?v=1"></script>
+<script src="/edit.js?v=16"></script>
 </body>
 </html>

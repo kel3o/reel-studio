@@ -146,6 +146,15 @@ button {
   -webkit-box-decoration-break: clone;
 }
 
+.tp-text .tp-w.tp-word-on {
+  color: #111;
+  background: #f5c542;
+  box-shadow: none;
+  border-radius: 0.12em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .tp-text .tp-em {
   font-weight: 700;
 }

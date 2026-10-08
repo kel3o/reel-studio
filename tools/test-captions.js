@@ -12,10 +12,18 @@ const {
   centersFromRight,
   buildAss,
   concatFilter,
+  toPersianDigits,
+  uniqueRenderName,
 } = require('../lib/captions');
 
-const spoken = spokenWords('سلام ⏸ دنیا  بعدی برای [2]تماس **[6]نمی‌کند.**');
-assert.deepStrictEqual(spoken, ['سلام', 'دنیا', 'بعدی', 'برای', 'تماس', 'نمی‌کند.']);
+const spoken = spokenWords('سلام ⏸ دنیا  بعدی برای [2]تماس **[6]نمی‌کند.** 3 تا');
+assert.deepStrictEqual(spoken, ['سلام', 'دنیا', 'بعدی', 'برای', 'تماس', 'نمی‌کند.', '۳', 'تا']);
+assert.strictEqual(toPersianDigits('40 و ٤٥ و ۴۰'), '۴۰ و ۴۵ و ۴۰');
+const stamp = new Date(2026, 9, 8, 23, 50, 10);
+const firstName = uniqueRenderName([], 'demo', stamp);
+const secondName = uniqueRenderName([firstName], 'demo', stamp);
+assert.ok(firstName.indexOf('۲۰۲۶-۱۰-۰۸-۲۳-۵۰') !== -1);
+assert.strictEqual(secondName, firstName.replace(/\.mp4$/, '-۲.mp4'));
 
 const clips = [
   { file: '01-1.webm', paragraph: 0, start: 0, duration: 4, text: 'یک دو سه چهار' },
@@ -74,7 +82,32 @@ const ass = buildAss({ style: clampStyle({ wordByWord: true, highlight: true }),
 assert.ok(ass.indexOf('یک') !== -1);
 assert.ok(ass.indexOf('PlayResX: 720') !== -1);
 assert.ok(ass.indexOf('Style: Hot,') !== -1);
+const digitAss = buildAss(
+  { style: clampStyle({ wordByWord: true, highlight: false, font: 'titr' }), words: [{ text: '3', start: 0, end: 1, paragraph: 0 }] },
+  1080,
+  1920,
+  'B Titr',
+  null,
+  true
+);
+assert.ok(digitAss.indexOf('۳') !== -1);
+assert.ok(digitAss.indexOf('B Titr,48') !== -1);
+assert.ok(digitAss.indexOf(',-1,0,0,0,') !== -1);
 assert.strictEqual(ass.indexOf('\u2014'), -1);
+assert.strictEqual(ass.indexOf('\u202B'), -1);
+
+const spaced = buildAss(
+  {
+    style: clampStyle({ letterSpacing: 8, wordByWord: false, highlight: true }),
+    words: words.slice(0, 2),
+  },
+  720,
+  1280,
+  'Vazirmatn'
+);
+assert.ok(spaced.indexOf(',100,100,0,0,') !== -1);
+assert.strictEqual(spaced.indexOf('\u202B'), -1);
+assert.ok(spaced.indexOf('یک') !== -1);
 
 const lineAss = buildAss(
   { style: clampStyle({ wordByWord: false, highlight: true, highlightOpacity: 40 }), words },
@@ -148,6 +181,16 @@ const stacked = require('../lib/captions').stackFilter(
   'C:\\takes\\captions.ass',
   'C:\\fonts'
 );
+const sheet = require('../lib/captions').overlayChain(
+  'vc',
+  [{ x: 12, y: 34, ranges: [{ start: 0, end: 1.5 }, { start: 2, end: 3 }] }],
+  2
+);
+assert.ok(sheet.indexOf('[vc][2:v]overlay=12:34') !== -1);
+assert.ok(sheet.indexOf('between(t,0.000,1.500)+between(t,2.000,3.000)') !== -1);
+assert.ok(sheet.indexOf('[vout]') !== -1);
+assert.strictEqual(sheet.indexOf('\u2014'), -1);
+
 assert.ok(stacked.indexOf('overlay=') !== -1);
 assert.ok(stacked.indexOf('crop=') !== -1);
 assert.strictEqual(stacked.indexOf('\u2014'), -1);

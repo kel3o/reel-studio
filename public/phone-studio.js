@@ -42,9 +42,11 @@
   window.__reelPhone = api;
 
   let ws = null;
+  let studioReplaced = false;
   let stunUrl = '';
   const peers = new Map();
   const earlyIce = new Map();
+  const delaySamples = new Map();
   let linkUrl = '';
   let linkKnown = false;
   let statusHandler = null;
@@ -415,12 +417,58 @@
     }
     peers.delete(id);
     earlyIce.delete(id);
+    delaySamples.delete(id);
     if (phone && phone.video) {
       phone.video.srcObject = null;
       if (phone.video.parentNode) phone.video.parentNode.removeChild(phone.video);
       phone.video = null;
     }
     if (phone && phone.mode === 'rtc') phone.mode = 'video';
+  }
+
+  // Chrome's jitter buffer grows after a short Wi-Fi blip and then stays large,
+  // so the phone picture is late even though the direct link is still up.
+  // Pin it back down. Do not close the peer to "catch up": SESSIONS.md,
+  // 5 October 2026. Rebuilding the link is what brings the one-second hitch.
+  function pinLive(pc) {
+    if (!pc || !pc.getReceivers) return;
+    pc.getReceivers().forEach(function (receiver) {
+      if (!receiver.track || receiver.track.kind !== 'video') return;
+      try {
+        if ('playoutDelayHint' in receiver) receiver.playoutDelayHint = 0;
+        if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0;
+      } catch (err) {
+        // this browser keeps its own buffer
+      }
+    });
+  }
+
+  function watchLiveDelay() {
+    peers.forEach(function (peer, id) {
+      const pc = peer.pc;
+      if (!pc || !pc.getStats) return;
+      const ice = pc.iceConnectionState;
+      if (ice !== 'connected' && ice !== 'completed') return;
+      pc.getStats()
+        .then(function (stats) {
+          if (peers.get(id) !== peer) return;
+          let delay = 0;
+          let count = 0;
+          stats.forEach(function (report) {
+            if (report.type !== 'inbound-rtp' || report.kind !== 'video') return;
+            if (typeof report.jitterBufferDelay === 'number') delay = report.jitterBufferDelay;
+            if (typeof report.jitterBufferEmittedCount === 'number') count = report.jitterBufferEmittedCount;
+          });
+          const prev = delaySamples.get(id);
+          delaySamples.set(id, { delay: delay, count: count });
+          if (!prev) return;
+          const frames = count - prev.count;
+          if (frames < 8) return;
+          const seconds = (delay - prev.delay) / frames;
+          if (seconds > 0.15) pinLive(pc);
+        })
+        .catch(function () {});
+    });
   }
 
   function paintRtcFrame() {
@@ -486,6 +534,8 @@
     video.autoplay = true;
     video.playsInline = true;
     video.style.opacity = '0.02';
+    video.style.width = '16px';
+    video.style.height = '16px';
     document.body.appendChild(video);
     phone.video = video;
     const pc = new RTCPeerConnection(rtcConfig());
@@ -498,6 +548,11 @@
       phone.mode = 'rtc';
       phone.waitingKey = false;
       phone.hasFrame = false;
+      pinLive(pc);
+    };
+    pc.oniceconnectionstatechange = function () {
+      const ice = pc.iceConnectionState;
+      if (ice === 'connected' || ice === 'completed') pinLive(pc);
     };
     pc.onicecandidate = function (ev) {
       if (!ev.candidate || !ws || ws.readyState !== 1) return;
@@ -530,6 +585,7 @@
   }
 
   function connect() {
+    if (studioReplaced) return;
     if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/api/phone-ws');
@@ -543,6 +599,15 @@
         try {
           msg = JSON.parse(ev.data);
         } catch (err) {
+          return;
+        }
+        if (msg.type === 'studio-replaced') {
+          studioReplaced = true;
+          try {
+            ws.close();
+          } catch (err) {
+            // already closing
+          }
           return;
         }
         if (msg.type === 'phone-status') setPhoneList(msg.phones || []);
@@ -560,10 +625,20 @@
     ws.onclose = function () {
       // The bridge sends a fresh phone-status as soon as this socket returns.
       // Do not keep a disconnected phone on screen while waiting.
+      // A replaced tab must not reconnect: that fight rebuilt the phone
+      // picture about twice a second.
       publishImmediate();
+      if (studioReplaced) return;
       setTimeout(connect, 400);
     };
   }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    if (!studioReplaced && ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    studioReplaced = false;
+    connect();
+  });
 
   function copyText(url, button) {
     function done(ok) {
@@ -648,6 +723,7 @@
   connect();
   refreshLink();
   requestAnimationFrame(paintRtcFrame);
+  setInterval(watchLiveDelay, 2000);
   setInterval(refreshLink, 5000);
   renderHint();
 })();

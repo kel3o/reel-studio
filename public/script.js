@@ -88,6 +88,28 @@
     preSnapshot = next;
   }
 
+  function faDigits(value) {
+    const persian = '۰۱۲۳۴۵۶۷۸۹';
+    return String(value == null ? '' : value).replace(/[0-9\u0660-\u0669]/g, (ch) => {
+      const n = ch >= '0' && ch <= '9' ? ch.charCodeAt(0) - 48 : ch.charCodeAt(0) - 0x0660;
+      return persian[n] || ch;
+    });
+  }
+
+  function hideColorTags(value) {
+    return String(value || '').replace(/\[([1-6])\]/g, '');
+  }
+
+  function cleanEditorTextNodes() {
+    const walker = document.createTreeWalker(textEditor, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach((node) => {
+      const next = faDigits(hideColorTags(node.nodeValue));
+      if (next !== node.nodeValue) node.nodeValue = next;
+    });
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, '&amp;')
@@ -114,7 +136,7 @@
           html += escapeHtml(source.slice(i)).replace(/\n/g, '<br>');
           break;
         }
-        const inner = source.slice(contentStart, close);
+        const inner = hideColorTags(source.slice(contentStart, close));
         html +=
           '<span class="em-preview em-preview-' +
           color +
@@ -125,7 +147,7 @@
         continue;
       }
       const next = source.indexOf('**', i);
-      const chunk = next === -1 ? source.slice(i) : source.slice(i, next);
+      const chunk = hideColorTags(next === -1 ? source.slice(i) : source.slice(i, next));
       html += escapeHtml(chunk).replace(/\n/g, '<br>');
       i = next === -1 ? source.length : next;
     }
@@ -134,14 +156,14 @@
 
   function editorToMarkup(root) {
     function of(node) {
-      if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+      if (node.nodeType === Node.TEXT_NODE) return faDigits(hideColorTags(node.nodeValue || ''));
       if (node.nodeType !== Node.ELEMENT_NODE) return '';
       const tag = node.tagName;
       if (tag === 'BR') return '\n';
       const em = String(node.className || '').match(/\bem-preview-([1-6])\b/);
       if (em) {
         let inner = Array.from(node.childNodes).map(of).join('');
-        inner = inner.replace(/\*\*/g, '');
+        inner = hideColorTags(inner.replace(/\*\*/g, ''));
         const lead = (inner.match(/^\s*/) || [''])[0];
         const trail = (inner.match(/\s*$/) || [''])[0];
         const core = inner.slice(lead.length, inner.length - trail.length);
@@ -164,6 +186,7 @@
 
   function setEditorText(text) {
     textEditor.innerHTML = markupToHtml(text);
+    cleanEditorTextNodes();
     textEditor.classList.toggle('is-empty', !String(text || '').trim());
   }
 
@@ -220,6 +243,7 @@
   });
 
   textEditor.addEventListener('input', () => {
+    cleanEditorTextNodes();
     textEditor.classList.toggle('is-empty', !getEditorText());
   });
 
@@ -238,7 +262,8 @@
     colorBox.addEventListener('click', (e) => {
       const btn = e.target.closest('.em-color');
       if (!btn) return;
-      emColor = Number(btn.getAttribute('data-color')) || 1;
+      const picked = Number(btn.getAttribute('data-color'));
+      emColor = Number.isFinite(picked) ? picked : 1;
       colorBox.querySelectorAll('.em-color').forEach((el) => el.classList.toggle('on', el === btn));
     });
   }
@@ -250,6 +275,25 @@
       while (el.firstChild) parent.insertBefore(el.firstChild, el);
       parent.removeChild(el);
     });
+  }
+
+  function dropEmptyEmphasis(root) {
+    Array.from(root.querySelectorAll('.em-preview')).forEach((el) => {
+      if (el.querySelector('br')) return;
+      if (!String(el.textContent || '').length) el.remove();
+    });
+  }
+
+  function liftMarkerOutOfEmphasis(marker) {
+    while (marker.parentElement && marker.parentElement !== textEditor && textEditor.contains(marker)) {
+      const parent = marker.parentElement;
+      if (!parent.closest('.em-preview')) break;
+      const after = parent.cloneNode(false);
+      while (marker.nextSibling) after.appendChild(marker.nextSibling);
+      parent.parentNode.insertBefore(marker, parent.nextSibling);
+      if (after.childNodes.length) parent.parentNode.insertBefore(after, marker.nextSibling);
+      if (!parent.childNodes.length) parent.remove();
+    }
   }
 
   if (emphasizeBtn) {
@@ -266,25 +310,41 @@
       }
       errorEl.textContent = '';
       noteEditorHistory(false);
-      const span = document.createElement('span');
-      span.className = 'em-preview em-preview-' + emColor;
+      let anchor = null;
       try {
         const frag = range.extractContents();
         const holder = document.createElement('div');
         holder.appendChild(frag);
         unwrapEmNodes(holder);
-        while (holder.firstChild) span.appendChild(holder.firstChild);
-        range.insertNode(span);
+        const marker = document.createTextNode('');
+        range.insertNode(marker);
+        liftMarkerOutOfEmphasis(marker);
+        if (emColor === 0) {
+          const restored = document.createDocumentFragment();
+          while (holder.firstChild) restored.appendChild(holder.firstChild);
+          anchor = restored.lastChild;
+          if (anchor) marker.parentNode.insertBefore(restored, marker);
+        } else {
+          const span = document.createElement('span');
+          span.className = 'em-preview em-preview-' + emColor;
+          while (holder.firstChild) span.appendChild(holder.firstChild);
+          marker.parentNode.insertBefore(span, marker);
+          anchor = span;
+        }
+        marker.remove();
+        dropEmptyEmphasis(textEditor);
       } catch (err) {
-        errorEl.textContent = 'این تکه رو نتونستم رنگی کنم';
+        errorEl.textContent = emColor === 0 ? 'این تکه رو نتونستم بی‌رنگ کنم' : 'این تکه رو نتونستم رنگی کنم';
         return;
       }
       rememberEditorBaseline();
       sel.removeAllRanges();
-      const after = document.createRange();
-      after.setStartAfter(span);
-      after.collapse(true);
-      sel.addRange(after);
+      if (anchor) {
+        const after = document.createRange();
+        after.setStartAfter(anchor);
+        after.collapse(true);
+        sel.addRange(after);
+      }
       textEditor.focus();
       textEditor.classList.toggle('is-empty', !getEditorText());
     });

@@ -1,4 +1,5 @@
 (function () {
+  if (window.parent && window.parent !== window) return;
   const state = {
     cameras: [],
     mics: [],
@@ -460,18 +461,38 @@
     });
   }
 
-  // Cover fit: crop the source frame to the target ratio (centered), so the
-  // canvas draw below is a plain crop plus uniform scale, never a squeeze.
-  function computeCropRect(srcW, srcH, targetRatio) {
+  function clampUnit(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return 0.5;
+    return Math.min(1, Math.max(0, v));
+  }
+
+  function framePan() {
+    if (!state.framePan) state.framePan = { x: 0.5, y: 0.5 };
+    return state.framePan;
+  }
+
+  function slotPan(slot) {
+    if (!state.slotPans) state.slotPans = {};
+    const key = slot && slot.id ? String(slot.id) : 'single';
+    if (!state.slotPans[key]) state.slotPans[key] = { x: 0.5, y: 0.5 };
+    return state.slotPans[key];
+  }
+
+  // Cover fit: crop the source to the target ratio. pan 0 keeps the start edge,
+  // 1 the end edge, 0.5 the center. Slack exists on only one axis.
+  function computeCropRect(srcW, srcH, targetRatio, panX, panY) {
     const srcRatio = srcW / srcH;
+    const px = clampUnit(panX);
+    const py = clampUnit(panY);
     if (srcRatio > targetRatio) {
       const sh = srcH;
       const sw = srcH * targetRatio;
-      return { sx: (srcW - sw) / 2, sy: 0, sw, sh };
+      return { sx: (srcW - sw) * px, sy: 0, sw, sh };
     }
     const sw = srcW;
     const sh = srcW / targetRatio;
-    return { sx: 0, sy: (srcH - sh) / 2, sw, sh };
+    return { sx: 0, sy: (srcH - sh) * py, sw, sh };
   }
 
   async function startPreview(camId, micId) {
@@ -530,7 +551,8 @@
     canvas.height = target.height;
 
     function drawFrame() {
-      const { sx, sy, sw, sh } = computeCropRect(rawCam.videoWidth, rawCam.videoHeight, target.ratio);
+      const pan = framePan();
+      const { sx, sy, sw, sh } = computeCropRect(rawCam.videoWidth, rawCam.videoHeight, target.ratio, pan.x, pan.y);
       ctx.drawImage(rawCam, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       state.drawHandle = requestAnimationFrame(drawFrame);
     }
@@ -626,7 +648,8 @@
         }
       }
       if (phoneCanvas.width > 2 && phoneCanvas.height > 2) {
-        const crop = computeCropRect(phoneCanvas.width, phoneCanvas.height, target.ratio);
+        const pan = framePan();
+        const crop = computeCropRect(phoneCanvas.width, phoneCanvas.height, target.ratio, pan.x, pan.y);
         ctx.drawImage(phoneCanvas, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
         if (cornerCtx) {
           cornerCtx.drawImage(canvas, 0, 0, corner.width, corner.height);
@@ -726,7 +749,7 @@
     return { x: x0, y: 0, w: x1 - x0, h: height };
   }
 
-  function drawCover(source, destX, destY, destW, destH) {
+  function drawCover(source, destX, destY, destW, destH, pan) {
     const sw = source.videoWidth || source.width;
     const sh = source.videoHeight || source.height;
     if (!sw || !sh || destH < 1 || destW < 1) {
@@ -734,7 +757,8 @@
       ctx.fillRect(destX, destY, destW, destH);
       return;
     }
-    const crop = computeCropRect(sw, sh, destW / destH);
+    const point = pan || framePan();
+    const crop = computeCropRect(sw, sh, destW / destH, point.x, point.y);
     ctx.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, destX, destY, destW, destH);
   }
 
@@ -946,7 +970,7 @@
       // Screen text must stay whole, so the screen is letterboxed, not cropped.
       function drawSlot(slot, x, y, w, h) {
         if (slot.kind === 'screen') drawContain(sourceForSlot(slot), x, y, w, h);
-        else drawCover(sourceForSlot(slot), x, y, w, h);
+        else drawCover(sourceForSlot(slot), x, y, w, h, slotPan(slot));
       }
       function drawFrame() {
         const slotsNow = state.splitSlots || [];
@@ -1071,6 +1095,57 @@
       requestAnimationFrame(step);
     }
     step();
+  }
+
+  function hitSlot(nx, ny) {
+    const slots = state.splitSlots || [];
+    if (!(state.split && slots.length > 1) || state.rotate) return null;
+    const target = ORIENTATIONS[state.orientation] || ORIENTATIONS.landscape;
+    for (let i = 0; i < slots.length; i++) {
+      const box = bandBox(i, slots.length, target.width, target.height);
+      const x0 = box.x / target.width;
+      const y0 = box.y / target.height;
+      const x1 = (box.x + box.w) / target.width;
+      const y1 = (box.y + box.h) / target.height;
+      if (nx >= x0 && nx < x1 && ny >= y0 && ny < y1) return slots[i];
+    }
+    return slots[0] || null;
+  }
+
+  function bindFramePan() {
+    const home = document.getElementById('stage-home');
+    const frameEl = home && home.querySelector('.stage-frame');
+    if (!frameEl || frameEl.dataset.panBound) return;
+    frameEl.dataset.panBound = '1';
+    frameEl.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const rect = frameEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const nx = (event.clientX - rect.left) / rect.width;
+      const ny = (event.clientY - rect.top) / rect.height;
+      const slot = hitSlot(nx, ny);
+      const point = slot ? slotPan(slot) : framePan();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const originX = point.x;
+      const originY = point.y;
+      frameEl.classList.add('is-panning');
+      try {
+        frameEl.setPointerCapture(event.pointerId);
+      } catch (err) {}
+      function move(ev) {
+        point.x = clampUnit(originX + (ev.clientX - startX) / rect.width);
+        point.y = clampUnit(originY + (ev.clientY - startY) / rect.height);
+      }
+      function up() {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        frameEl.classList.remove('is-panning');
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      event.preventDefault();
+    });
   }
 
   function renderOrientationButtons() {
@@ -1233,7 +1308,7 @@
 
   function captureBusy() {
     const phase = window.__reelCapture && window.__reelCapture.phase;
-    return phase === 'recording' || phase === 'countdown';
+    return phase === 'recording' || phase === 'paused' || phase === 'countdown';
   }
 
   const shareBox = document.getElementById('share-screen');
@@ -1492,6 +1567,7 @@
     }
 
     devicesReady = true;
+    bindFramePan();
     try {
       await startPreview(cameraSelect.value, micSelect.value);
     } catch (err) {

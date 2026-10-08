@@ -47,6 +47,8 @@
   let tpPhase = '';
   let tpBasePos = 0;
   let tpBaseAt = 0;
+  let tpYellow = false;
+  let tpYellowIndex = -1;
 
   function renderTpUi() {
     const show = tpWanted && tpUserOn;
@@ -64,9 +66,14 @@
 
   function markPhoneLine() {
     tpText.querySelectorAll('.tp-w.tp-line-on').forEach((el) => el.classList.remove('tp-line-on'));
-    if (tpLayer.hidden) return;
+    tpText.querySelectorAll('.tp-w.tp-word-on').forEach((el) => el.classList.remove('tp-word-on'));
+    if (tpLayer.hidden || !tpYellow) return;
     const words = tpText.querySelectorAll('.tp-w');
     if (!words.length) return;
+    if (tpYellowIndex >= 0 && tpYellowIndex < words.length) {
+      words[tpYellowIndex].classList.add('tp-word-on');
+      return;
+    }
     const stageRect = tpStage.getBoundingClientRect();
     const eyeY = stageRect.top + stageRect.height * 0.22;
     let best = null;
@@ -81,11 +88,7 @@
         best = word;
       }
     });
-    if (!best) return;
-    const lineTop = best.offsetTop;
-    words.forEach((word) => {
-      if (Math.abs(word.offsetTop - lineTop) <= 1) word.classList.add('tp-line-on');
-    });
+    if (best) best.classList.add('tp-word-on');
   }
 
   function applyTeleprompter(msg) {
@@ -117,6 +120,8 @@
     }
     if (typeof msg.visible === 'boolean') tpWanted = msg.visible;
     if (typeof msg.scrolling === 'boolean') tpScrolling = msg.scrolling;
+    if (typeof msg.yellowWords === 'boolean') tpYellow = msg.yellowWords;
+    if (typeof msg.yellowIndex === 'number') tpYellowIndex = msg.yellowIndex;
     if (!tpWanted) tpScrolling = false;
     renderTpUi();
     markPhoneLine();
@@ -237,7 +242,7 @@
         forceKey = true;
         if (lastConfig && ws.readyState === 1) ws.send(lastConfig);
       }
-      if (msg.type === 'rtc-restart') openDirect();
+      if (msg.type === 'rtc-restart') requestDirect();
       if (msg.type === 'want-audio') {
         audioWanted = true;
         if (running) startAudio(session);
@@ -684,12 +689,25 @@
   // The studio page asks for this whenever its socket is new: refresh, or a
   // return from another page. The old link stays "up" on the phone otherwise,
   // and the new page has nothing to paint.
+  let directHold = 0;
+
+  // A burst of restarts, about twice a second, tore the direct link down and
+  // the status flipped. One restart still has to go through: a new dashboard
+  // page has nothing to paint until the phone offers again.
+  function requestDirect() {
+    if (directHold) return;
+    directHold = setTimeout(function () {
+      directHold = 0;
+    }, 1200);
+    openDirect();
+  }
+
   function openDirect() {
     if (!running || !stream) return Promise.resolve(false);
     const id = session;
     const gen = ++rtcGen;
     stopFallback();
-    setStatus('دارم تصویر را مستقیم می‌فرستم');
+    if (!directEver) setStatus('دارم تصویر را مستقیم می‌فرستم');
     return startRtc(stream, id, gen).then(function (ok) {
       if (gen !== rtcGen || id !== session) return false;
       if (ok) {
@@ -753,6 +771,8 @@
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
       params.encodings[0].maxBitrate = 4000000;
       params.encodings[0].maxFramerate = 30;
+      params.encodings[0].priority = 'high';
+      params.encodings[0].networkPriority = 'high';
       params.degradationPreference = 'maintain-framerate';
       sender.setParameters(params).catch(function () {});
     } catch (err) {
