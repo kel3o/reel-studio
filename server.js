@@ -16,6 +16,13 @@ const {
   pickDuration,
   normalizeSavedClips,
   sanitizeLanes,
+  cutIntervalSeconds,
+  isCameraTakeName,
+  programTakeName,
+  applyCutCameraFiles,
+  expandCutClips,
+  expandLookClips,
+  sanitizeLookCuts,
   buildAss,
   concatFilter,
   stackFilter,
@@ -75,10 +82,11 @@ const FFPROBE = toolPath('ffprobe');
 const MANUAL_DIR = path.join(ROOT, 'manual');
 const TAKE_FILE_RE = /^[0-9]{2}-[0-9]{1,4}\.webm$/;
 const TAKE_AUDIO_FILE_RE = /^[0-9]{2}-[0-9]{1,4}-a\.(webm|m4a|ogg)$/;
+const CAMERA_TAKE_RE = /^[0-9]{2}-[0-9]{1,4}-c[0-9]\.webm$/i;
 const ATTACH_FILE_RE = /^attach-[a-f0-9]{12}\.(webm|mp4|mov|mp3|wav|m4a|aac|ogg)$/;
 function isClipFile(name) {
   const value = String(name || '');
-  return TAKE_FILE_RE.test(value) || TAKE_AUDIO_FILE_RE.test(value) || ATTACH_FILE_RE.test(value);
+  return TAKE_FILE_RE.test(value) || TAKE_AUDIO_FILE_RE.test(value) || CAMERA_TAKE_RE.test(value) || ATTACH_FILE_RE.test(value);
 }
 
 function isAudioOnlyExt(ext) {
@@ -88,6 +96,7 @@ function isAudioOnlyExt(ext) {
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.woff2': 'font/woff2',
@@ -101,6 +110,8 @@ const MIME = {
   '.m4a': 'audio/mp4',
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
+  '.wasm': 'application/wasm',
+  '.tflite': 'application/octet-stream',
 };
 
 function sendJson(res, status, data) {
@@ -407,8 +418,73 @@ function ensureAudioLane(lanes) {
 
 function videoLaneCount(lanes) {
   const list = Array.isArray(lanes) ? lanes : [];
-  const count = list.filter((lane) => lane && lane.kind !== 'audio' && lane.kind !== 'text').length;
+  const count = list.filter((lane) => lane && lane.kind !== 'audio' && lane.kind !== 'text' && lane.kind !== 'shape').length;
   return Math.max(1, count);
+}
+
+function cameraLayoutOf(session, doc) {
+  const raw = session && session.cameraLayout ? session.cameraLayout : doc && doc.cameraLayout;
+  if (raw === 'cut' || raw === 'split' || raw === 'look') return raw;
+  return '';
+}
+
+function defaultVideoGuides(layout, cameras) {
+  if (layout === 'cut' || layout === 'look') return false;
+  if (layout === 'split') return true;
+  return Array.isArray(cameras) && cameras.length > 1;
+}
+
+function resolvedVideoGuides(doc, session) {
+  if (doc && typeof doc.videoGuides === 'boolean') return doc.videoGuides;
+  const cameras =
+    doc && Array.isArray(doc.cameras) && doc.cameras.length
+      ? doc.cameras
+      : session && Array.isArray(session.cameras)
+        ? session.cameras
+        : [];
+  return defaultVideoGuides(cameraLayoutOf(session, doc), cameras);
+}
+
+function sessionForSlug(slug) {
+  try {
+    const sessionPath = path.join(TAKES_DIR, slug, 'session.json');
+    if (!fs.existsSync(sessionPath)) return null;
+    return readJsonFile(sessionPath);
+  } catch (err) {
+    return null;
+  }
+}
+
+function presentCaptionDoc(doc, session) {
+  const layout = cameraLayoutOf(session, doc);
+  const next = Object.assign({}, doc);
+  if (layout) next.cameraLayout = layout;
+  if (typeof next.videoGuides !== 'boolean') {
+    next.videoGuides = defaultVideoGuides(layout, next.cameras || (session && session.cameras));
+  }
+  return next;
+}
+
+function guidesRenderLanes(lanes, guidesOn) {
+  const raw = Array.isArray(lanes) ? lanes.filter((lane) => lane) : [];
+  const skip = new Set();
+  raw.forEach((lane) => {
+    if (lane.hidden || lane.kind === 'shape') skip.add(lane.id);
+  });
+  const list = raw.filter((lane) => !skip.has(lane.id));
+  if (guidesOn) return { lanes: list, skip };
+  const bands = list.filter((lane) => lane.kind === 'band');
+  const keepId = bands.length ? bands[0].id : '';
+  bands.forEach((lane) => {
+    if (lane.id !== keepId) skip.add(lane.id);
+  });
+  const next = list
+    .filter((lane) => !skip.has(lane.id))
+    .map((lane) => {
+      if (lane.kind === 'band') return Object.assign({}, lane, { kind: 'full', band: 0, bands: 1 });
+      return lane;
+    });
+  return { lanes: next, skip };
 }
 
 function serveFile(req, res, filePath, contentType) {
@@ -576,6 +652,42 @@ function isTakeVideoFileName(file) {
   return /^[0-9]{2}-[0-9]{1,4}\.webm$/i.test(String(file || ''));
 }
 
+function cameraFilesOnSession(session, clip) {
+  if (!clip) return [];
+  const program = programTakeName(clip.file);
+  if (!program || !TAKE_FILE_RE.test(program)) return [];
+  const paragraphs = session && Array.isArray(session.paragraphs) ? session.paragraphs : [];
+  const item =
+    paragraphs.find((p) => p && Number(p.index) === Number(clip.paragraph) && String(p.accepted) === program) ||
+    paragraphs.find((p) => p && String(p.accepted) === program);
+  const files = item && Array.isArray(item.cameraFiles) ? item.cameraFiles : [];
+  return files.map((name) => {
+    const text = String(name || '');
+    return isCameraTakeName(text) && programTakeName(text) === program ? text : '';
+  });
+}
+
+function lookCutsOnSession(session, clip) {
+  const paragraphs = session && Array.isArray(session.paragraphs) ? session.paragraphs : [];
+  const program = programTakeName(clip && clip.file);
+  const item =
+    paragraphs.find((p) => p && Number(p.index) === Number(clip.paragraph) && program && String(p.accepted) === program) ||
+    paragraphs.find((p) => p && Number(p.index) === Number(clip.paragraph));
+  return sanitizeLookCuts(item && item.lookCuts);
+}
+
+function lookCutMap(session) {
+  const paragraphs = session && Array.isArray(session.paragraphs) ? session.paragraphs : [];
+  const out = {};
+  paragraphs.forEach((item) => {
+    if (!item || item.index == null) return;
+    const cuts = sanitizeLookCuts(item.lookCuts);
+    if (!cuts.length) return;
+    out[String(Number(item.index))] = cuts;
+  });
+  return out;
+}
+
 function repairCaptionsDocument(doc, session) {
   if (!doc || typeof doc !== 'object') return doc;
   const cameras = Array.isArray(session && session.cameras)
@@ -584,6 +696,9 @@ function repairCaptionsDocument(doc, session) {
       ? doc.cameras.slice()
       : [];
   if (cameras.length) doc.cameras = cameras;
+  const layout = cameraLayoutOf(session, doc);
+  if (layout) doc.cameraLayout = layout;
+  if (typeof doc.videoGuides !== 'boolean') doc.videoGuides = defaultVideoGuides(layout, cameras);
   const clips = Array.isArray(doc.clips) ? doc.clips : [];
   clips.forEach((clip) => {
     if (!clip || !isTakeAudioFileName(clip.file)) return;
@@ -592,6 +707,43 @@ function repairCaptionsDocument(doc, session) {
     clip.camera = 'audio';
     if (clip.volume == null || Number(clip.volume) < 0.01) clip.volume = 1;
   });
+  if (layout === 'look') doc.lookCuts = lookCutMap(session);
+  if ((layout === 'cut' || layout === 'look') && cameras.length > 1 && !doc.lanesTouched) {
+    const interval = cutIntervalSeconds(
+      session && session.cutSeconds != null ? session.cutSeconds : doc.cutSeconds
+    );
+    const laneIds = cameras.map((_, index) => 'cam-' + index);
+    const hidden = new Map();
+    (Array.isArray(doc.lanes) ? doc.lanes : []).forEach((lane) => {
+      if (lane && lane.hidden) hidden.set(String(lane.id), true);
+    });
+    const cutLanes = cameras.map((label, index) => ({
+      id: 'cam-' + index,
+      label: label || 'دوربین ' + (index + 1),
+      kind: 'full',
+      band: 0,
+      bands: 1,
+      file: '',
+      weight: 1,
+      panY: 0.5,
+      hidden: !!hidden.get('cam-' + index),
+    }));
+    const keep = (Array.isArray(doc.lanes) ? doc.lanes : []).filter(
+      (lane) => lane && (lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file' || lane.kind === 'shape')
+    );
+    doc.lanes = cutLanes.concat(keep);
+    const filesFor = (clip) => cameraFilesOnSession(session, clip);
+    if (layout === 'look') {
+      doc.clips = expandLookClips(clips, laneIds, (clip) => lookCutsOnSession(session, clip), !!doc.lookSliced, filesFor);
+      doc.lookSliced = true;
+    } else {
+      doc.clips = expandCutClips(clips, laneIds, interval, !!doc.cutSliced, filesFor);
+      doc.clips = applyCutCameraFiles(doc.clips, laneIds, filesFor);
+      doc.cutSeconds = interval;
+      doc.cutSliced = true;
+    }
+    return doc;
+  }
   clips.forEach((clip) => {
     if (!clip || !isTakeAudioFileName(clip.file) || clip.lane !== 'audio') return;
     const videoName = String(clip.file).replace(/-a\.webm$/i, '.webm');
@@ -630,7 +782,7 @@ function repairCaptionsDocument(doc, session) {
   if (cameras.length > 1 && !doc.lanesTouched) {
     const defaults = defaultVideoLanes(cameras);
     const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
-    const keep = lanes.filter((lane) => lane && (lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file'));
+    const keep = lanes.filter((lane) => lane && (lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file' || lane.kind === 'shape'));
     const existingBands = lanes.filter((lane) => lane && lane.kind === 'band');
     if (!existingBands.length) {
       doc.lanes = defaults.concat(keep);
@@ -686,13 +838,18 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
   if (!accepted.length) throw fail(400, 'هنوز ضبط قبول‌شده‌ای نیست');
   const existing = readCaptions(slug);
   const key = accepted.map((item) => item.index + ':' + item.accepted).join('|');
-  const existingKey =
-    existing && Array.isArray(existing.clips)
-      ? existing.clips
-          .filter((clip) => TAKE_FILE_RE.test(String(clip.file || '')))
-          .map((clip) => clip.paragraph + ':' + clip.file)
-          .join('|')
-      : '';
+  const presentTakes = new Set();
+  if (existing && Array.isArray(existing.clips)) {
+    existing.clips.forEach((clip) => {
+      const base = programTakeName(clip && clip.file);
+      if (!base) return;
+      presentTakes.add(Number(clip.paragraph) + ':' + base);
+    });
+  }
+  const existingKey = accepted
+    .filter((item) => presentTakes.has(Number(item.index) + ':' + String(item.accepted)))
+    .map((item) => item.index + ':' + item.accepted)
+    .join('|');
   const hasAudioLane =
     existing && Array.isArray(existing.lanes) && existing.lanes.some((lane) => lane && lane.kind === 'audio');
   const audioReady =
@@ -800,6 +957,8 @@ async function loadOrBuildCaptions(slug, force, durationMap) {
     title: titleForSlug(slug, session),
     style: existing && existing.style ? clampStyle(existing.style) : defaultStyle(),
     cameras,
+    cameraLayout: cameraLayoutOf(session, null),
+    videoGuides: defaultVideoGuides(cameraLayoutOf(session, null), cameras),
     lanes,
     clips: videoClips.concat(audioClips),
     words: buildWordsForClips(wordSource),
@@ -822,24 +981,36 @@ function saveCaptionEdits(slug, body) {
   const extraFiles = [];
   (Array.isArray(body.clips) ? body.clips : []).forEach((clip) => {
     const file = String(clip && clip.file || '');
-    if (!ATTACH_FILE_RE.test(file) && !TAKE_AUDIO_FILE_RE.test(file)) return;
+    if (!ATTACH_FILE_RE.test(file) && !TAKE_AUDIO_FILE_RE.test(file) && !CAMERA_TAKE_RE.test(file)) return;
     const full = path.resolve(TAKES_DIR, slug, file);
     if (isInsideDir(path.join(TAKES_DIR, slug), full) && fs.existsSync(full)) extraFiles.push(file);
   });
   const clips = normalizeSavedClips(existing.clips, body.clips, extraFiles);
   const words = sanitizeWords(body.words, clips);
   const textLaneVisible = body.textLaneVisible !== false;
+  const session = sessionForSlug(slug);
+  const layout = cameraLayoutOf(session, existing);
   const doc = {
     slug,
     title: existing.title || titleForSlug(slug, null),
     free: !!existing.free,
     style: clampStyle(body.style || {}),
     cameras: Array.isArray(existing.cameras) ? existing.cameras.slice() : [],
+    cameraLayout: layout,
+    videoGuides: typeof body.videoGuides === 'boolean' ? body.videoGuides : resolvedVideoGuides(existing, null),
     lanes,
     clips,
     words: textLaneVisible ? words : [],
     textLaneVisible,
+    wordsHidden: typeof body.wordsHidden === 'boolean' ? body.wordsHidden : !!existing.wordsHidden,
     lanesTouched: typeof body.lanesTouched === 'boolean' ? body.lanesTouched : !!existing.lanesTouched,
+    cutSeconds:
+      layout === 'cut'
+        ? cutIntervalSeconds(session && session.cutSeconds != null ? session.cutSeconds : existing.cutSeconds)
+        : existing.cutSeconds,
+    cutSliced: layout === 'cut' ? true : !!existing.cutSliced,
+    lookCuts: existing.lookCuts && typeof existing.lookCuts === 'object' ? existing.lookCuts : undefined,
+    lookSliced: layout === 'look' ? true : !!existing.lookSliced,
     audioMigrated: Boolean(existing.audioMigrated || clips.some((clip) => clip && clip.lane === 'audio')),
     updatedAt: new Date().toISOString(),
   };
@@ -926,20 +1097,28 @@ function writeOverlayPng(dir, index, raw) {
   return file;
 }
 
-async function burnCaptions(slug, metrics, overlays) {
+async function burnCaptions(slug, metrics, overlays, skipCaptions) {
   if (!slug || !SLUG_RE.test(slug)) throw fail(400, 'اسم سناریو لازم است');
   const doc = readCaptions(slug);
   if (!doc || !Array.isArray(doc.clips) || !doc.clips.length || !Array.isArray(doc.words)) {
     throw fail(404, 'اول زیرنویس را ذخیره کن');
   }
   if (!doc.words.length && !doc.free) throw fail(404, 'اول زیرنویس را ذخیره کن');
+  if (doc.wordsHidden) skipCaptions = true;
   const style = clampStyle(doc.style);
+  const session = sessionForSlug(slug);
+  const guidesOn = resolvedVideoGuides(doc, session);
+  const layoutNow = cameraLayoutOf(session, doc);
+  const cutLayout = layoutNow === 'cut' || layoutNow === 'look';
+  const plan = guidesRenderLanes(doc.lanes, cutLayout ? false : guidesOn);
   const font = resolveFont(style.font, PUBLIC_DIR) || resolveFont('vazir', PUBLIC_DIR);
   if (!font) throw fail(500, 'فونت زیرنویس پیدا نشد');
   const face = readFontFace(font.file);
   const metas = [];
   for (let i = 0; i < doc.clips.length; i++) {
     const clip = doc.clips[i];
+    if (clip && (clip.shape === 'circle' || clip.shape === 'rect' || clip.shape === 'arrow')) continue;
+    if (plan.skip.has(String(clip.lane || ''))) continue;
     if (!isClipFile(clip.file)) throw fail(400, 'اسم فایل ضبط درست نیست');
     const filePath = path.join(TAKES_DIR, slug, clip.file);
     if (!isInsideDir(path.join(TAKES_DIR, slug), filePath) || !fs.existsSync(filePath)) {
@@ -950,8 +1129,8 @@ async function burnCaptions(slug, metrics, overlays) {
     const srcIn = Math.max(0, Number(clip.srcIn) || 0);
     const srcSpan = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || info.duration;
     const volume = clip.volume == null ? 1 : Number(clip.volume);
-    const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
-    const videoLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text');
+    const lanes = plan.lanes;
+    const videoLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text' && item.kind !== 'shape');
     const lane = lanes.find((item) => item.id === clip.lane) || null;
     const isAudioLane = !!(lane && lane.kind === 'audio');
     const isTextLane = !!(lane && lane.kind === 'text');
@@ -994,23 +1173,33 @@ async function burnCaptions(slug, metrics, overlays) {
   const width = evenDim(sizeSource.info.width);
   const height = evenDim(sizeSource.info.height);
   if (width < 2 || height < 2) throw fail(500, 'اندازه‌ی ویدیو خوانده نشد');
-  const sheet = cleanOverlays(overlays);
+  const sheet = skipCaptions ? [] : cleanOverlays(overlays);
   const useSheet = sheet.length > 0;
-  const assPath = path.join(TAKES_DIR, slug, 'captions.ass');
-  if (!useSheet) {
+  const useAss = !skipCaptions && !useSheet;
+  const assPath = useAss ? path.join(TAKES_DIR, slug, 'captions.ass') : '';
+  if (useAss) {
     fs.writeFileSync(
       assPath,
       '\uFEFF' + buildAss(doc, width, height, face.family || font.name, metrics, face.bold),
       'utf8'
     );
   }
-  const fontDir = useSheet ? '' : fs.mkdtempSync(path.join(os.tmpdir(), 'reel-font-'));
+  const fontDir = useAss ? fs.mkdtempSync(path.join(os.tmpdir(), 'reel-font-')) : '';
   const sheetDir = useSheet ? fs.mkdtempSync(path.join(os.tmpdir(), 'reel-cap-')) : '';
   try {
     const sheetFiles = useSheet ? sheet.map((item, index) => writeOverlayPng(sheetDir, index, item.png)) : [];
-    if (!useSheet) fs.copyFileSync(font.file, path.join(fontDir, path.basename(font.file)));
+    if (useAss) fs.copyFileSync(font.file, path.join(fontDir, path.basename(font.file)));
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const outFile = path.join(OUT_DIR, uniqueRenderName(renderNames(slug), slug, new Date()));
+    if (cutLayout) {
+      metas.sort((a, b) => {
+        const aVisual = Number(a.laneIndex) >= 0 && !a.audioOnly;
+        const bVisual = Number(b.laneIndex) >= 0 && !b.audioOnly;
+        if (aVisual && bVisual) return b.laneIndex - a.laneIndex;
+        if (aVisual !== bVisual) return aVisual ? 1 : -1;
+        return 0;
+      });
+    }
     const args = ['-y', '-hide_banner'];
     metas.forEach((meta) => {
       args.push('-i', meta.filePath);
@@ -1018,18 +1207,29 @@ async function burnCaptions(slug, metrics, overlays) {
     sheetFiles.forEach((file) => {
       args.push('-loop', '1', '-i', file);
     });
-    const lanes = Array.isArray(doc.lanes) ? doc.lanes : [];
+    const lanes = plan.lanes;
     const vCount = videoLaneCount(lanes);
-    const visualLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text');
+    const visualLanes = lanes.filter((item) => item && item.kind !== 'audio' && item.kind !== 'text' && item.kind !== 'shape');
     const laneWeights = visualLanes.map((item) => {
       const w = Number(item.weight);
       return Number.isFinite(w) && w > 0.02 ? w : 1;
     });
-    const bandCrop = visualLanes.some((item) => item && item.kind === 'band' && Number(item.bands) > 1);
-    const filter =
-      vCount > 1 || bandCrop
-        ? stackFilter(metas, width, height, vCount, assPath, fontDir, laneWeights, useSheet ? sheet : null, metas.length)
-        : concatFilter(metas, width, height, assPath, fontDir, useSheet ? sheet : null, metas.length);
+    const bandCrop = guidesOn && visualLanes.some((item) => item && item.kind === 'band' && Number(item.bands) > 1);
+    let filter;
+    if (cutLayout) {
+      metas.forEach((meta) => {
+        if (Number(meta.laneIndex) >= 0) {
+          meta.laneIndex = 0;
+          meta.cropBands = 0;
+          meta.cropBand = 0;
+        }
+      });
+      filter = stackFilter(metas, width, height, 1, assPath, fontDir, [1], useSheet ? sheet : null, metas.length);
+    } else if (vCount > 1 || bandCrop) {
+      filter = stackFilter(metas, width, height, vCount, assPath, fontDir, laneWeights, useSheet ? sheet : null, metas.length);
+    } else {
+      filter = concatFilter(metas, width, height, assPath, fontDir, useSheet ? sheet : null, metas.length);
+    }
     args.push(
       '-filter_complex',
       filter,
@@ -1281,6 +1481,8 @@ const server = http.createServer((req, res) => {
     const paragraph = parsed.searchParams.get('paragraph');
     const take = parsed.searchParams.get('take');
     const kind = String(parsed.searchParams.get('kind') || '') === 'audio' ? 'audio' : 'video';
+    const cameraRaw = parsed.searchParams.get('camera');
+    const cameraIndex = /^[0-9]$/.test(cameraRaw || '') ? cameraRaw : '';
     if (!slug || !SLUG_RE.test(slug) || !NUMBER_RE.test(paragraph || '') || !NUMBER_RE.test(take || '')) {
       sendJson(res, 400, { error: 'اسم سناریو، شماره پاراگراف و شماره ضبط لازم است' });
       return;
@@ -1289,11 +1491,15 @@ const server = http.createServer((req, res) => {
       .then(async (buffer) => {
         const dir = path.join(TAKES_DIR, slug);
         fs.mkdirSync(dir, { recursive: true });
-        const fileName = kind === 'audio' ? `${paragraph}-${take}-a.webm` : `${paragraph}-${take}.webm`;
+        const fileName = cameraIndex !== ''
+          ? `${paragraph}-${take}-c${cameraIndex}.webm`
+          : kind === 'audio'
+            ? `${paragraph}-${take}-a.webm`
+            : `${paragraph}-${take}.webm`;
         const full = path.join(dir, fileName);
         fs.writeFileSync(full, buffer);
         let audioFile = '';
-        if (kind !== 'audio') {
+        if (kind !== 'audio' && cameraIndex === '') {
           const companion = audioCompanionName(fileName);
           if (companion) {
             try {
@@ -1443,7 +1649,15 @@ const server = http.createServer((req, res) => {
       sendJson(res, 404, { error: 'زیرنویسی ذخیره نشده' });
       return;
     }
-    sendJson(res, 200, Object.assign({}, doc, { hasRender: renderNames(slug).length > 0 }));
+    const session = sessionForSlug(slug);
+    const before = JSON.stringify(doc);
+    const repaired = repairCaptionsDocument(doc, session);
+    if (JSON.stringify(repaired) !== before) {
+      repaired.updatedAt = new Date().toISOString();
+      writeCaptions(slug, repaired);
+    }
+    const shown = presentCaptionDoc(repaired, session);
+    sendJson(res, 200, Object.assign({}, shown, { hasRender: renderNames(slug).length > 0 }));
     return;
   }
 
@@ -1499,17 +1713,19 @@ const server = http.createServer((req, res) => {
       .then((buffer) => {
         let metrics = null;
         let overlays = null;
+        let skipCaptions = false;
         if (buffer.length) {
           try {
             const body = JSON.parse(buffer.toString('utf8'));
             if (body && Array.isArray(body.overlays)) overlays = body.overlays;
+            if (body && body.skipCaptions) skipCaptions = true;
             if (body && (Array.isArray(body.widths) || Number(body.space) > 0)) metrics = body;
           } catch (err) {
             metrics = null;
             overlays = null;
           }
         }
-        return burnCaptions(slug, metrics, overlays);
+        return burnCaptions(slug, metrics, overlays, skipCaptions);
       })
       .then((result) => sendJson(res, 200, result))
       .catch((err) => sendJson(res, err.status || 500, { error: err.message }));

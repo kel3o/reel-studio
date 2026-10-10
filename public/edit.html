@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ویرایش زیرنویس</title>
-<link rel="stylesheet" href="/style.css?v=19" />
+<title>ویرایشگر</title>
+<link rel="stylesheet" href="/style.css?v=34" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -34,7 +34,7 @@
 </header>
 <div class="sub-page">
   <a href="/archive.html" class="back-btn">بازگشت</a>
-  <h1 id="edit-title">زیرنویس</h1>
+  <h1 id="edit-title">ویرایشگر</h1>
   <p id="edit-status" class="page-lead"></p>
 
   <div class="edit-grid">
@@ -44,6 +44,8 @@
           <video id="player" playsinline></video>
           <canvas id="mix-view" class="mix-view" hidden></canvas>
           <div id="band-overlays" class="band-overlays" hidden></div>
+          <canvas id="shape-view" class="shape-view" hidden></canvas>
+          <div id="shape-layer" class="shape-layer" hidden></div>
           <div id="cap-layer" class="cap-layer">
             <div id="caption" class="caption font-vazir"></div>
             <div class="cap-box" aria-hidden="true">
@@ -69,6 +71,18 @@
         <label class="zoom-label">زوم پیش‌نمایش
           <input id="preview-zoom" type="range" min="100" max="300" step="10" value="100" />
           <span id="preview-zoom-out" class="opt-readout">۱۰۰</span>
+        </label>
+        <div class="shape-quick">
+          <button type="button" class="btn shape-quick-btn" aria-haspopup="true">اشکال</button>
+          <div class="shape-quick-menu" role="menu">
+            <button type="button" data-quick-shape="circle">دایره</button>
+            <button type="button" data-quick-shape="rect">مستطیل</button>
+            <button type="button" data-quick-shape="arrow">فلش</button>
+          </div>
+        </div>
+        <label class="video-guides">
+          <input id="video-guides" type="checkbox" />
+          خطوط ادیت ویدیو
         </label>
       </div>
     </section>
@@ -129,12 +143,30 @@
           <span id="cap-opacity-out" class="opt-readout">۵۰</span>
         </label>
       </div>
+      <div class="highlight-block">
+        <div class="highlight-row">
+          <label class="check-row">
+            <input id="cap-background" type="checkbox" />
+            پس زمینه زیرنویس
+          </label>
+          <div id="background-fields" class="highlight-fields" hidden>
+            <label class="hl-color">رنگ پس‌زمینه
+              <input id="cap-background-color" type="color" value="#000000" />
+            </label>
+          </div>
+        </div>
+        <label id="background-opacity-wrap" hidden>پوشش پس‌زمینه
+          <input id="cap-background-opacity" type="range" min="0" max="100" step="1" value="60" />
+          <span id="cap-background-opacity-out" class="opt-readout">۶۰</span>
+        </label>
+      </div>
       <label class="check-row">
         <input id="cap-word" type="checkbox" />
         کلمه‌به‌کلمه
       </label>
       <div class="edit-actions">
         <button id="rebuild-btn" type="button" class="btn">زمان‌بندی دوباره</button>
+        <button id="save-btn" type="button" class="btn">ثبت تغییرات</button>
         <button id="render-btn" type="button" class="btn btn-accent">ثبت نهایی</button>
         <a id="render-link" class="btn" hidden>دیدن فایل</a>
         <button id="open-export" type="button" class="btn" hidden>نمایش پوشه</button>
@@ -178,7 +210,29 @@
         <button id="tl-add-word" type="button" class="btn btn-add">افزودن کلمه</button>
         <button id="tl-add-pause" type="button" class="btn">مکث بین زیرنویس</button>
         <button id="tl-add-blank" type="button" class="btn">متن بدون زیرنویس</button>
+        <button id="tl-break-caption" type="button" class="btn">زیرنویس بعدی</button>
         <button id="tl-delete-word" type="button" class="btn btn-danger">حذف</button>
+      </div>
+      <div id="tl-shape-tools" class="tl-toolset" hidden>
+        <label class="tl-inline">رنگ
+          <input id="shape-color" type="color" value="#ff3d1f" />
+        </label>
+        <label id="shape-diameter-wrap" class="tl-inline">قطر
+          <input id="shape-diameter" type="range" min="6" max="80" step="1" value="22" />
+          <span id="shape-diameter-out" class="opt-readout">۲۲</span>
+        </label>
+        <label id="shape-width-wrap" class="tl-inline">عرض
+          <input id="shape-width" type="range" min="6" max="90" step="1" value="28" />
+          <span id="shape-width-out" class="opt-readout">۲۸</span>
+        </label>
+        <label id="shape-height-wrap" class="tl-inline">ارتفاع
+          <input id="shape-height" type="range" min="4" max="90" step="1" value="16" />
+          <span id="shape-height-out" class="opt-readout">۱۶</span>
+        </label>
+        <label class="tl-inline">ضخامت
+          <input id="shape-stroke" type="range" min="2" max="36" step="1" value="8" />
+          <span id="shape-stroke-out" class="opt-readout">۸</span>
+        </label>
       </div>
       </div>
       <div class="tl-edit-fixed">
@@ -192,6 +246,14 @@
             <button type="button" data-lane-kind="video">تصویر / ویدیو</button>
             <button type="button" data-lane-kind="audio">صدا</button>
             <button type="button" data-lane-kind="text">متن</button>
+            <div class="tl-shape-item">
+              <button type="button" data-shape-menu="1">اشکال</button>
+              <div id="tl-shape-picks" class="tl-shape-picks">
+                <button type="button" data-lane-kind="shape-circle">دایره</button>
+                <button type="button" data-lane-kind="shape-rect">مستطیل</button>
+                <button type="button" data-lane-kind="shape-arrow">فلش</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -225,7 +287,7 @@
   </div>
 </div>
 <script src="/shell.js"></script>
-<script src="/rec-shortcut.js?v=1"></script>
-<script src="/edit.js?v=16"></script>
+<script src="/rec-shortcut.js?v=2"></script>
+<script src="/edit.js?v=25"></script>
 </body>
 </html>

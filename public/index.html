@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ریل استودیو</title>
-<link rel="stylesheet" href="/style.css?v=18" />
+<link rel="stylesheet" href="/style.css?v=36" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -15,7 +15,7 @@
   } catch (e) {}
 </script>
 </head>
-<body>
+<body class="page-home">
 <header class="site-header">
   <a class="brand-logo" href="/" dir="ltr" lang="en"><span class="brand-reel">Reel</span> Studio</a>
   <nav class="site-nav" aria-label="منو">
@@ -45,54 +45,94 @@
               <canvas id="frame-canvas" class="frame-canvas"></canvas>
             </div>
           </div>
-          <div class="meter-track">
-            <div id="meter-bar" class="meter-bar"></div>
-          </div>
           <p id="readiness" class="readiness mic-status">وضعیت میکروفون</p>
+          <div class="mic-wave" aria-hidden="true">
+            <svg class="mic-wave-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zm-5 9a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.9V21h3v2H8v-2h3v-2.1A7 7 0 0 1 5 12h2z"/></svg>
+            <span id="mic-wave-bars" class="mic-wave-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          </div>
         </div>
         <div class="dash-controls">
-          <div class="set-card">
+          <div class="set-card dash-rec-card">
             <span>ضبط ویدیو</span>
             <div class="rec-start-btns">
-              <button id="rec-free" type="button" class="orientation-btn rec-start-btn">ضبط بدون سناریو</button>
-              <button id="rec-script" type="button" class="orientation-btn rec-start-btn">ضبط از روی سناریو</button>
-            </div>
-          </div>
-          <div class="set-card">
-            <span>نسبت تصویر</span>
-            <div class="orientation-group set-ratios" role="group" aria-label="نسبت تصویر">
-              <button id="dash-orientation-landscape" type="button" class="orientation-btn ratio-btn" data-orientation="landscape">
-                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 24 16"><rect x="1.5" y="3.5" width="21" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
-                <span>افقی</span>
+              <button id="rec-script" type="button" class="orientation-btn rec-start-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm8 1.6V9h4.4L14 4.6zM8 12h8v1.6H8V12zm0 3.4h8V17H8v-1.6z"/></svg>
+                <span>ضبط از روی سناریو</span>
               </button>
-              <button id="dash-orientation-square" type="button" class="orientation-btn ratio-btn" data-orientation="square">
-                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><rect x="2" y="2" width="14" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
-                <span>مربع</span>
-              </button>
-              <button id="dash-orientation-vertical" type="button" class="orientation-btn ratio-btn" data-orientation="vertical">
-                <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 16 24"><rect x="3.5" y="1.5" width="9" height="21" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
-                <span>ریل</span>
+              <button id="rec-free" type="button" class="orientation-btn rec-start-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2.1l3.1-1.8a1 1 0 0 1 1.5.8v7.8a1 1 0 0 1-1.5.8L16 14.9V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z"/></svg>
+                <span>ضبط بدون سناریو</span>
               </button>
             </div>
-            <p class="opt-hint">سریع عوض کن. جزئیات دوربین و میکروفون توی تنظیماته.</p>
           </div>
-          <div class="set-card">
+          <div class="dash-split">
+            <div class="set-card dash-mode-card">
+              <span>دوربین‌ها</span>
+              <div class="cam-actions dash-cam-actions">
+                <div class="mode-btn-wrap">
+                  <button id="rotate-cameras" type="button" class="orientation-btn mode-btn">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2.1l3.1-1.8a1 1 0 0 1 1.5.8v7.8a1 1 0 0 1-1.5.8L16 14.9V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z"/></svg>
+                    <span>برش دوربین</span>
+                  </button>
+                  <div id="cut-seconds-wrap" class="cut-drop">
+                    <span>مقدار ثانیه هر برش</span>
+                    <input id="cut-seconds" type="number" min="0.3" max="30" step="0.5" value="1" />
+                  </div>
+                </div>
+                <button id="split-cameras" type="button" class="orientation-btn mode-btn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8H3V6zm2 2v4h9V8H5zm6 8h5v2h-5v-2zm5-8h5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-5v-2h4v-5h-4V8z"/></svg>
+                  <span>چند دوربین</span>
+                </button>
+                <button id="look-cameras" type="button" class="orientation-btn mode-btn mode-btn-look">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 6c4.5 0 8.2 2.6 9.5 6-1.3 3.4-5 6-9.5 6S3.8 15.4 2.5 12C3.8 8.6 7.5 6 12 6zm0 2C8.8 8 5.7 9.9 4.6 12 5.7 14.1 8.8 16 12 16s6.3-1.9 7.4-4C18.3 9.9 15.2 8 12 8zm0 1.6a2.4 2.4 0 1 1 0 4.8 2.4 2.4 0 0 1 0-4.8z"/></svg>
+                  <span>برش اتوماتیک</span>
+                </button>
+                <p id="look-note" class="look-note" hidden></p>
+              </div>
+            </div>
+            <div class="set-card dash-ratio-card">
+              <span>نسبت تصویر</span>
+              <div class="orientation-group set-ratios" role="group" aria-label="نسبت تصویر">
+                <button id="dash-orientation-vertical" type="button" class="orientation-btn ratio-btn" data-orientation="vertical">
+                  <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 16 24"><rect x="3.5" y="1.5" width="9" height="21" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                  <span>عمودی</span>
+                </button>
+                <button id="dash-orientation-square" type="button" class="orientation-btn ratio-btn" data-orientation="square">
+                  <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><rect x="2" y="2" width="14" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                  <span>مربع</span>
+                </button>
+                <button id="dash-orientation-landscape" type="button" class="orientation-btn ratio-btn" data-orientation="landscape">
+                  <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 24 16"><rect x="1.5" y="3.5" width="21" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+                  <span>افقی</span>
+                </button>
+              </div>
+              <div id="square-split-wrap" class="square-split" hidden>
+                <span>تقسیم مربع</span>
+                <div class="orientation-group set-ratios" role="group" aria-label="تقسیم مربع">
+                  <button type="button" class="orientation-btn ratio-btn" data-square-split="cols">
+                    <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="6.2" height="15" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="10.3" y="1.5" width="6.2" height="15" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+                    <span>عمودی</span>
+                  </button>
+                  <button type="button" class="orientation-btn ratio-btn" data-square-split="rows">
+                    <span class="ratio-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><rect x="1.5" y="1.5" width="15" height="6.2" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="1.5" y="10.3" width="15" height="6.2" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+                    <span>افقی</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="cam-list-card" class="set-card dash-cam-list">
             <span>دوربین‌ها</span>
-            <div class="cam-actions dash-cam-actions">
-              <button id="split-cameras" type="button" class="orientation-btn">چند دوربین</button>
-              <button id="rotate-cameras" type="button" class="orientation-btn">برش دوربین</button>
+            <div class="split-picks">
+              <label class="share-screen-wrap split-pick">
+                <input id="share-screen" type="checkbox" />
+                <span>اشتراک صفحه</span>
+                <span id="share-screen-hint" class="share-hint" hidden></span>
+              </label>
+              <div id="split-picks" class="split-picks-cams" hidden></div>
             </div>
-            <label class="share-screen-wrap">
-              <input id="share-screen" type="checkbox" />
-              <span>اشتراک صفحه</span>
-            </label>
-            <p id="share-screen-hint" class="opt-hint" hidden></p>
-            <label id="cut-seconds-wrap" class="cut-seconds-wrap" hidden>هر چند ثانیه برش
-              <input id="cut-seconds" type="number" min="0.3" max="30" step="0.1" value="1.5" />
-            </label>
-            <div id="split-picks" class="split-picks" hidden></div>
           </div>
-          <div class="set-card">
+          <div class="set-card dash-net-card">
             <span>آدرس شبکه</span>
             <p id="phone-hint" class="phone-hint"></p>
           </div>
@@ -221,10 +261,9 @@
         <div class="set-stage-col">
           <p class="set-kicker">پیش‌نمایش</p>
           <div id="settings-stage" class="settings-stage"></div>
-          <p class="opt-hint">دوربین یا نسبت را عوض کن. تصویر همین‌جا عوض می‌شود و روی نوشته نمی‌افتد.</p>
         </div>
         <div class="set-cards">
-          <label class="set-card">دوربین
+          <label class="set-card">دوربین اصلی
             <select id="camera-select"></select>
           </label>
           <label class="set-card">میکروفون
@@ -268,19 +307,25 @@
 <div id="rec-browse" class="rec-browse" hidden>
   <iframe id="rec-browse-frame" title="صفحه"></iframe>
 </div>
-<div id="rec-float" class="rec-float">
-  <canvas id="rec-float-preview" class="rec-float-preview" width="160" height="214"></canvas>
+<div id="rec-float" class="rec-float" hidden>
+  <div class="rec-float-stage">
+    <canvas id="rec-float-preview" class="rec-float-preview" width="160" height="214"></canvas>
+    <div id="rec-float-count" class="rec-float-count" hidden></div>
+  </div>
   <div class="rec-float-actions">
     <button id="rec-float-start" type="button">شروع ضبط</button>
     <button id="rec-float-stop" type="button" hidden>توقف</button>
     <button id="rec-float-pause" type="button" hidden>توقف کوتاه</button>
     <button id="rec-float-resume" type="button" hidden>شروع مجدد</button>
   </div>
+  <p id="rec-float-note" class="rec-float-note" hidden></p>
 </div>
-<script src="/phone-studio.js?v=15"></script>
-<script src="/devices.js?v=15"></script>
-<script src="/capture.js?v=11"></script>
-<script src="/rec-shortcut.js?v=1"></script>
+<script src="/phone-studio.js?v=21"></script>
+<script src="/gaze/gaze-score.js?v=1"></script>
+<script src="/gaze.js?v=2"></script>
+<script src="/devices.js?v=25"></script>
+<script src="/capture.js?v=13"></script>
+<script src="/rec-shortcut.js?v=2"></script>
 <script src="/app.js?v=2"></script>
 <script src="/shell.js"></script>
 </body>

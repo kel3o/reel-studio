@@ -640,11 +640,33 @@
     connect();
   });
 
+  let copiedUntil = 0;
+
+  function markCopied(button, ok) {
+    const label = button.querySelector('span');
+    const bar = button.closest('.phone-bar');
+    const link = bar ? bar.querySelector('.phone-link') : null;
+    const text = ok ? 'کپی شد' : 'کپی نشد';
+    if (label) label.textContent = text;
+    else button.textContent = text;
+    if (link) link.classList.toggle('is-copied', !!ok);
+  }
+
   function copyText(url, button) {
     function done(ok) {
-      button.textContent = ok ? 'کپی شد' : 'کپی نشد';
+      copiedUntil = ok ? Date.now() + 1500 : 0;
+      const until = copiedUntil;
+      markCopied(button, ok);
       setTimeout(function () {
-        button.textContent = 'کپی آدرس';
+        if (copiedUntil !== until) return;
+        copiedUntil = 0;
+        const current = document.querySelector('.phone-bar button');
+        if (!current) return;
+        const label = current.querySelector('span');
+        if (label) label.textContent = 'کپی';
+        else current.textContent = 'کپی';
+        const link = current.closest('.phone-bar').querySelector('.phone-link');
+        if (link) link.classList.remove('is-copied');
       }, 1500);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -685,16 +707,35 @@
       el.appendChild(wait);
       return;
     }
-    const url = document.createElement('span');
-    url.className = 'phone-link';
-    url.textContent = linkUrl;
+    const bar = document.createElement('span');
+    bar.className = 'phone-bar';
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'کپی آدرس';
+    const copySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    copySvg.setAttribute('viewBox', '0 0 24 24');
+    copySvg.setAttribute('aria-hidden', 'true');
+    const copyPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    copyPath.setAttribute('fill', 'currentColor');
+    copyPath.setAttribute('d', 'M8 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2zm0 2H6v10h8v-2H8V9zm2-4v10h8V7h-3V5h-5z');
+    copySvg.appendChild(copyPath);
+    const copyLabel = document.createElement('span');
+    copyLabel.textContent = 'کپی';
+    button.append(copySvg, copyLabel);
     button.addEventListener('click', function () {
       copyText(linkUrl, button);
     });
-    el.append(url, document.createElement('br'), button);
+    const url = document.createElement('span');
+    url.className = 'phone-link';
+    if (Date.now() < copiedUntil) url.classList.add('is-copied');
+    url.textContent = linkUrl;
+    const linkIco = document.createElement('span');
+    linkIco.className = 'phone-link-ico';
+    linkIco.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10 13a5 5 0 0 0 7.1.1l1.8-1.8a5 5 0 0 0-7.1-7.1L10.5 5.5M14 11a5 5 0 0 0-7.1-.1l-1.8 1.8a5 5 0 0 0 7.1 7.1l1.3-1.3"/></svg>';
+    const gap = document.createElement('span');
+    gap.className = 'phone-bar-gap';
+    gap.append(linkIco, url);
+    bar.append(button, gap);
+    el.appendChild(bar);
   }
 
   function refreshLink() {

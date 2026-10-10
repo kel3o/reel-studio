@@ -2,6 +2,13 @@
 
 ## Where this stands
 
+Version 3.0.0 (11 October 2026). The local studio is the product in use:
+scenario editor, teleprompter, scripted and free recording, three camera modes
+(timed cut, multi camera, automatic look cut with the local BlazeFace sensor),
+vertical, square and landscape frames, square-only column or row split, phone
+camera, timeline editor, archives, and a title-only help page whose answers
+open in a centered popup.
+
 Phases 1, 2 and 3 are done.
 
 Phase 1: `server.js`, `lib/parse-script.js`, `public/` (page, css, js),

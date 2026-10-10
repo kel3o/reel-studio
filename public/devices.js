@@ -17,7 +17,11 @@
     usingPhone: false,
     split: false,
     rotate: false,
-    cutSeconds: 1.5,
+    look: false,
+    lookIndex: 0,
+    lookCuts: null,
+    squareSplit: 'cols',
+    cutSeconds: 1,
     cutStartedAt: 0,
     extraStreams: [],
     extraVideos: [],
@@ -50,13 +54,14 @@
   const readiness = document.getElementById('readiness');
   const splitBtn = document.getElementById('split-cameras');
   const rotateBtn = document.getElementById('rotate-cameras');
+  const lookBtn = document.getElementById('look-cameras');
+  const lookNote = document.getElementById('look-note');
   const cutSecondsInput = document.getElementById('cut-seconds');
-  const cutSecondsWrap = document.getElementById('cut-seconds-wrap');
   let previewToken = 0;
   let devicesReady = false;
 
   function pickMode() {
-    return !!(state.split || state.rotate);
+    return !!(state.split || state.rotate || state.look);
   }
 
   function screenLive() {
@@ -83,14 +88,27 @@
 
   function cutIntervalMs() {
     const value = Number(state.cutSeconds);
-    if (!Number.isFinite(value)) return 1500;
+    if (!Number.isFinite(value)) return 1000;
     return Math.max(300, Math.min(30000, Math.round(value * 1000)));
   }
 
   function resetCutClock() {
     state.cutStartedAt = performance.now();
+    state.cutHold = null;
   }
   state.resetCutClock = resetCutClock;
+  state.cutSecondsValue = function () {
+    return cutIntervalMs() / 1000;
+  };
+  state.pauseCutClock = function () {
+    if (state.cutHold != null) return;
+    state.cutHold = performance.now() - (state.cutStartedAt || performance.now());
+  };
+  state.resumeCutClock = function () {
+    if (state.cutHold == null) return;
+    state.cutStartedAt = performance.now() - state.cutHold;
+    state.cutHold = null;
+  };
 
   function orientationButtons() {
     return document.querySelectorAll('[data-orientation]');
@@ -267,6 +285,15 @@
     }
   }
 
+  function releaseSlotViews() {
+    const views = state.slotViews || {};
+    Object.keys(views).forEach((id) => {
+      const view = views[id];
+      if (view && view.stream) stopTracks(view.stream.getTracks());
+    });
+    state.slotViews = null;
+  }
+
   function releaseExtras() {
     (state.extraStreams || []).forEach((stream) => stopTracks(stream.getTracks()));
     state.extraStreams = [];
@@ -276,6 +303,7 @@
     });
     state.extraVideos = [];
     state.splitSlots = null;
+    releaseSlotViews();
   }
 
   function streamIsLive() {
@@ -729,7 +757,9 @@
 
   function bandBox(index, count, width, height) {
     const portrait = height > width;
-    const grid = !portrait && count === 4;
+    const square = width === height;
+    const rows = portrait || (square && state.squareSplit === 'rows');
+    const grid = !portrait && !square && count === 4;
     if (grid) {
       const col = index % 2;
       const row = Math.floor(index / 2);
@@ -739,7 +769,7 @@
       const y1 = Math.round(((row + 1) * height) / 2);
       return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
     }
-    if (portrait) {
+    if (rows) {
       const y0 = Math.round((index * height) / count);
       const y1 = Math.round(((index + 1) * height) / count);
       return { x: 0, y: y0, w: width, h: y1 - y0 };
@@ -749,29 +779,31 @@
     return { x: x0, y: 0, w: x1 - x0, h: height };
   }
 
-  function drawCover(source, destX, destY, destW, destH, pan) {
+  function drawCover(source, destX, destY, destW, destH, pan, target) {
+    const g = target || ctx;
     const sw = source.videoWidth || source.width;
     const sh = source.videoHeight || source.height;
     if (!sw || !sh || destH < 1 || destW < 1) {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(destX, destY, destW, destH);
+      g.fillStyle = '#000';
+      g.fillRect(destX, destY, destW, destH);
       return;
     }
     const point = pan || framePan();
     const crop = computeCropRect(sw, sh, destW / destH, point.x, point.y);
-    ctx.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, destX, destY, destW, destH);
+    g.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, destX, destY, destW, destH);
   }
 
-  function drawContain(source, destX, destY, destW, destH) {
+  function drawContain(source, destX, destY, destW, destH, target) {
+    const g = target || ctx;
     const sw = source.videoWidth || source.width;
     const sh = source.videoHeight || source.height;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(destX, destY, destW, destH);
+    g.fillStyle = '#000';
+    g.fillRect(destX, destY, destW, destH);
     if (!sw || !sh || destH < 1 || destW < 1) return;
     const scale = Math.min(destW / sw, destH / sh);
     const w = sw * scale;
     const h = sh * scale;
-    ctx.drawImage(source, 0, 0, sw, sh, destX + (destW - w) / 2, destY + (destH - h) / 2, w, h);
+    g.drawImage(source, 0, 0, sw, sh, destX + (destW - w) / 2, destY + (destH - h) / 2, w, h);
   }
 
   function readList(key) {
@@ -795,10 +827,16 @@
     return String(n).replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[digit]);
   }
 
+  function webcamLabel(index, total) {
+    if (total <= 1) return 'دوربین وبکم';
+    return 'دوربین وبکم ' + faDigits(index + 1);
+  }
+
   function cameraChoices() {
-    const list = state.cameras.map((cam) => ({
+    const total = state.cameras.length;
+    const list = state.cameras.map((cam, index) => ({
       id: cam.deviceId,
-      label: cam.label || 'دوربین',
+      label: webcamLabel(index, total),
     }));
     if (window.__reelPhone && window.__reelPhone.cameras) {
       window.__reelPhone.cameras().forEach((phone) => {
@@ -968,18 +1006,49 @@
         return slot.video;
       }
       // Screen text must stay whole, so the screen is letterboxed, not cropped.
-      function drawSlot(slot, x, y, w, h) {
-        if (slot.kind === 'screen') drawContain(sourceForSlot(slot), x, y, w, h);
-        else drawCover(sourceForSlot(slot), x, y, w, h, slotPan(slot));
+      function drawSlot(slot, x, y, w, h, target) {
+        if (slot.kind === 'screen') drawContain(sourceForSlot(slot), x, y, w, h, target);
+        else drawCover(sourceForSlot(slot), x, y, w, h, slotPan(slot), target);
       }
+      // Cut mode keeps one full-frame canvas per camera. The program canvas
+      // still switches. Each lane later reads its own canvas, so an edge drag
+      // shows that camera and not whichever camera was on screen.
+      const slotViews = {};
+      if ((state.rotate || state.look) && slots.length > 1) {
+        slots.forEach((slot) => {
+          const own = document.createElement('canvas');
+          own.width = canvas.width;
+          own.height = canvas.height;
+          slotViews[slot.id] = {
+            canvas: own,
+            ctx: own.getContext('2d', { alpha: false }),
+            stream: own.captureStream(30),
+          };
+        });
+      }
+      state.slotViews = Object.keys(slotViews).length ? slotViews : null;
       function drawFrame() {
         const slotsNow = state.splitSlots || [];
         const count = slotsNow.length || 1;
-        if (state.rotate) {
-          const interval = cutIntervalMs();
-          const index = Math.floor((performance.now() - state.cutStartedAt) / interval) % count;
-          const slot = slotsNow[index] || slotsNow[0];
+        if (state.rotate || state.look) {
+          let slot = slotsNow[0];
+          if (state.look) {
+            const index = Math.max(0, Math.min(count - 1, state.lookIndex || 0));
+            slot = slotsNow[index] || slotsNow[0];
+          } else {
+            const interval = cutIntervalMs();
+            const elapsed = state.cutHold != null ? state.cutHold : performance.now() - state.cutStartedAt;
+            const index = Math.floor(elapsed / interval) % count;
+            slot = slotsNow[index] || slotsNow[0];
+          }
           if (slot) drawSlot(slot, 0, 0, canvas.width, canvas.height);
+          if (state.slotViews) {
+            slotsNow.forEach((item) => {
+              const view = state.slotViews[item.id];
+              if (!view) return;
+              drawSlot(item, 0, 0, view.canvas.width, view.canvas.height, view.ctx);
+            });
+          }
         } else {
           for (let i = 0; i < slotsNow.length; i++) {
             const box = bandBox(i, count, canvas.width, canvas.height);
@@ -1009,9 +1078,12 @@
       const combined = canvasStream.getVideoTracks().concat(audioTrack ? [audioTrack] : []);
       state.stream = new MediaStream(combined);
       preview.srcObject = state.stream;
-      readiness.dataset.camera = state.rotate
-        ? 'برش ' + faDigits(slots.length) + ' دوربین'
-        : faDigits(slots.length) + ' دوربین';
+      readiness.dataset.camera = state.look
+        ? 'برش اتوماتیک'
+        : state.rotate
+          ? 'برش ' + faDigits(slots.length) + ' دوربین'
+          : faDigits(slots.length) + ' دوربین';
+      renderLookNote();
       readiness.dataset.mic = audioTrack ? audioTrack.label : 'بدون میکروفون';
       readiness.dataset.resolution = `${canvas.width}x${canvas.height}`;
       state.phoneNote = missed ? 'بعضی دوربین‌ها باز نشدن' : '';
@@ -1079,8 +1151,28 @@
       state.meterValue = dbfs;
 
       const pct = Math.max(0, Math.min(100, (dbfs + 60) * (100 / 60)));
-      meterBar.style.width = pct + '%';
-      meterBar.classList.toggle('clip', dbfs > -3);
+      if (meterBar) {
+        meterBar.style.width = pct + '%';
+        meterBar.classList.toggle('clip', dbfs > -3);
+      }
+      const waveBars = document.querySelectorAll('#mic-wave-bars i');
+      if (waveBars.length) {
+        const chunk = Math.floor(buffer.length / waveBars.length) || 1;
+        waveBars.forEach((bar, index) => {
+          let local = 0;
+          const start = index * chunk;
+          const end = Math.min(buffer.length, start + chunk);
+          for (let j = start; j < end; j += 8) {
+            const abs = Math.abs(buffer[j]);
+            if (abs > local) local = abs;
+          }
+          const boosted = local * 1.3;
+          const db = boosted > 0 ? 20 * Math.log10(boosted) : -100;
+          const level = Math.max(0, Math.min(1, (db + 60) / 60));
+          const h = Math.max(4, Math.min(22, Math.round(4 + level * 18)));
+          bar.style.height = h + 'px';
+        });
+      }
 
       const now = performance.now();
       if (dbfs < -45) {
@@ -1099,7 +1191,7 @@
 
   function hitSlot(nx, ny) {
     const slots = state.splitSlots || [];
-    if (!(state.split && slots.length > 1) || state.rotate) return null;
+    if (!(state.split && slots.length > 1) || state.rotate || state.look) return null;
     const target = ORIENTATIONS[state.orientation] || ORIENTATIONS.landscape;
     for (let i = 0; i < slots.length; i++) {
       const box = bandBox(i, slots.length, target.width, target.height);
@@ -1160,12 +1252,36 @@
       home.classList.toggle('is-square', state.orientation === 'square');
       home.classList.toggle('is-vertical', state.orientation === 'vertical');
     }
+    renderSquareSplit();
+  }
+
+  function renderSquareSplit() {
+    const wrap = document.getElementById('square-split-wrap');
+    if (!wrap) return;
+    wrap.hidden = !(state.split && state.orientation === 'square');
+    wrap.querySelectorAll('[data-square-split]').forEach((btn) => {
+      btn.classList.toggle('on', btn.getAttribute('data-square-split') === state.squareSplit);
+    });
+  }
+
+  function setSquareSplit(next) {
+    if (next !== 'rows' && next !== 'cols') return;
+    if (captureBusy()) {
+      state.phoneNote = 'وسط ضبط عوضش نکن';
+      renderReadiness();
+      renderSquareSplit();
+      return;
+    }
+    state.squareSplit = next;
+    storeId('reel.squareSplit', next);
+    renderSquareSplit();
   }
 
   function renderSplitPicks() {
     const box = document.getElementById('split-picks');
+    const card = document.getElementById('cam-list-card');
     if (!box) return;
-    if (cutSecondsWrap) cutSecondsWrap.hidden = !state.rotate;
+    if (card) card.hidden = false;
     if (!pickMode()) {
       box.hidden = true;
       box.replaceChildren();
@@ -1182,10 +1298,12 @@
       .join('|');
     if (signature && signature === state.splitPickSig && box.childElementCount) {
       box.hidden = false;
+      if (card) card.hidden = false;
       return;
     }
     state.splitPickSig = signature;
     box.hidden = false;
+    if (card) card.hidden = false;
     box.replaceChildren();
     state.splitOrder.forEach((id, index) => {
       const item = byId[id];
@@ -1269,10 +1387,179 @@
     renderSplitPicks();
   }
 
+  let gazeScores = [];
+  let gazeLocked = false;
+  let gazeChallenger = -1;
+  let gazeWins = 0;
+  let gazeCursor = 0;
+  let gazeBusy = false;
+  let gazeCanvas = null;
+  let gazeCtx = null;
+
+  function firstFaceIndex(slots) {
+    const list = slots || [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i].kind !== 'screen') return i;
+    }
+    return 0;
+  }
+
+  function slotSource(slot) {
+    if (!slot) return null;
+    if (slot.kind === 'phone') {
+      if (!window.__reelPhone || !window.__reelPhone.canvasFor) return null;
+      return window.__reelPhone.canvasFor(slot.phoneId) || null;
+    }
+    if (slot.kind === 'screen') return state.screenVideo;
+    return slot.video || null;
+  }
+
+  function renderLookNote() {
+    if (!lookNote) return;
+    if (!state.look) {
+      lookNote.hidden = true;
+      lookNote.textContent = '';
+      return;
+    }
+    lookNote.hidden = false;
+    const slots = state.splitSlots || [];
+    const faceCount = slots.filter((slot) => slot && slot.kind !== 'screen').length;
+    const gaze = window.__reelGaze;
+    if (faceCount < 2) {
+      lookNote.textContent = 'حداقل دو دوربین روشن کن';
+      return;
+    }
+    if (!gaze || !gaze.isReady()) {
+      lookNote.textContent = gaze && gaze.isFailed() ? 'حسگر نگاه آماده نشد' : 'حسگر نگاه داره آماده می‌شه';
+      return;
+    }
+    if (!gazeLocked) {
+      lookNote.textContent = 'به لنز دوربین نگاه کن';
+      return;
+    }
+    lookNote.textContent = 'دوربین ' + faDigits((state.lookIndex || 0) + 1);
+  }
+
+  function noteLookCut(index) {
+    const cap = window.__reelCapture;
+    if (!cap || !state.look) return;
+    if (cap.phase !== 'recording' && cap.phase !== 'paused') return;
+    const t = typeof cap.recordSeconds === 'function' ? cap.recordSeconds() : 0;
+    if (!Array.isArray(state.lookCuts)) state.lookCuts = [];
+    const time = Math.round(Math.max(0, t) * 1000) / 1000;
+    const last = state.lookCuts[state.lookCuts.length - 1];
+    if (!last) {
+      state.lookCuts.push({ t: 0, camera: index });
+      return;
+    }
+    if (last.camera === index) return;
+    if (time - last.t < 0.25) {
+      last.camera = index;
+      return;
+    }
+    state.lookCuts.push({ t: time, camera: index });
+  }
+
+  function setLookIndex(index) {
+    const count = (state.splitSlots || []).length || 1;
+    const next = Math.max(0, Math.min(count - 1, index));
+    state.lookIndex = next;
+    noteLookCut(next);
+    renderLookNote();
+  }
+
+  function resetLookSensor() {
+    gazeScores = [];
+    gazeLocked = false;
+    gazeChallenger = -1;
+    gazeWins = 0;
+    gazeCursor = 0;
+    state.lookIndex = firstFaceIndex(state.splitSlots);
+    if (window.__reelGaze) window.__reelGaze.boot();
+    renderLookNote();
+  }
+
+  function beginLookTake() {
+    if (!state.look) {
+      state.lookCuts = null;
+      return;
+    }
+    state.lookCuts = [{ t: 0, camera: state.lookIndex || 0 }];
+  }
+
+  function grabSlotBitmap(slot) {
+    const src = slotSource(slot);
+    if (!src) return null;
+    const sw = src.videoWidth || src.width || 0;
+    const sh = src.videoHeight || src.height || 0;
+    if (sw < 8 || sh < 8) return null;
+    const w = 192;
+    const h = Math.max(32, Math.round((w * sh) / sw));
+    if (!gazeCanvas) {
+      gazeCanvas = document.createElement('canvas');
+      gazeCtx = gazeCanvas.getContext('2d', { alpha: false });
+    }
+    if (gazeCanvas.width !== w || gazeCanvas.height !== h) {
+      gazeCanvas.width = w;
+      gazeCanvas.height = h;
+    }
+    gazeCtx.drawImage(src, 0, 0, w, h);
+    if (typeof createImageBitmap !== 'function') return null;
+    return createImageBitmap(gazeCanvas);
+  }
+
+  async function gazeRound() {
+    if (!state.look || gazeBusy) return;
+    const gaze = window.__reelGaze;
+    const scoreApi = window.reelGazeScore;
+    if (!gaze || !scoreApi) return;
+    if (!gaze.isReady()) {
+      if (!gaze.isFailed()) gaze.boot().then(() => renderLookNote());
+      return;
+    }
+    const slots = state.splitSlots || [];
+    const faces = [];
+    slots.forEach((slot, index) => {
+      if (slot && slot.kind !== 'screen') faces.push({ slot: slot, index: index });
+    });
+    if (faces.length < 2) return;
+    const item = faces[gazeCursor % faces.length];
+    gazeCursor += 1;
+    gazeBusy = true;
+    try {
+      const bitmap = await grabSlotBitmap(item.slot);
+      let value = 0;
+      if (bitmap) {
+        const msg = await gaze.detect(bitmap, item.index, bitmap.width, bitmap.height);
+        if (msg && msg.faces) value = scoreApi.bestFrontal(msg.faces, msg.width || bitmap.width, msg.height || bitmap.height);
+      }
+      gazeScores[item.index] = { value: value, at: performance.now() };
+      const decision = scoreApi.decideLook({
+        active: state.lookIndex || 0,
+        locked: gazeLocked,
+        challenger: gazeChallenger,
+        wins: gazeWins,
+        scores: gazeScores,
+        now: performance.now(),
+      });
+      gazeLocked = decision.locked;
+      gazeChallenger = decision.challenger;
+      gazeWins = decision.wins;
+      if ((state.lookIndex || 0) !== decision.active) setLookIndex(decision.active);
+      else renderLookNote();
+    } catch (err) {
+      gazeScores[item.index] = { value: 0, at: performance.now() };
+    } finally {
+      gazeBusy = false;
+    }
+  }
+
   function renderSplitButton() {
     if (splitBtn) splitBtn.classList.toggle('on', !!state.split);
     if (rotateBtn) rotateBtn.classList.toggle('on', !!state.rotate);
+    if (lookBtn) lookBtn.classList.toggle('on', !!state.look);
     if (cutSecondsInput) cutSecondsInput.value = String(state.cutSeconds);
+    renderLookNote();
     renderSplitPicks();
   }
 
@@ -1282,21 +1569,16 @@
       renderReadiness();
       return;
     }
-    const nextSplit = mode === 'split';
-    const nextRotate = mode === 'rotate';
-    const turningOff = (state.split && nextSplit) || (state.rotate && nextRotate);
-    if (turningOff) {
-      state.split = false;
-      state.rotate = false;
-    } else {
-      if (nextSplit && state.rotate) state.rotate = false;
-      if (nextRotate && state.split) state.split = false;
-      state.split = nextSplit;
-      state.rotate = nextRotate;
-      if (nextRotate) resetCutClock();
-    }
+    const current = state.split ? 'split' : state.rotate ? 'rotate' : state.look ? 'look' : '';
+    const next = current === mode ? '' : mode;
+    state.split = next === 'split';
+    state.rotate = next === 'rotate';
+    state.look = next === 'look';
+    if (state.rotate) resetCutClock();
+    if (state.look) resetLookSensor();
     storeId('reel.split', state.split ? '1' : '');
     storeId('reel.rotate', state.rotate ? '1' : '');
+    storeId('reel.look', state.look ? '1' : '');
     renderSplitButton();
     renderOrientationButtons();
     try {
@@ -1327,8 +1609,17 @@
 
   function setShareHint(text) {
     if (!shareHint) return;
-    shareHint.textContent = text || '';
-    shareHint.hidden = !text;
+    shareHint.replaceChildren();
+    if (!text) {
+      shareHint.hidden = true;
+      return;
+    }
+    shareHint.hidden = false;
+    shareHint.dir = 'ltr';
+    const words = document.createElement('bdi');
+    words.dir = 'rtl';
+    words.textContent = text;
+    shareHint.append('(', words, ')');
   }
 
   async function restartAfterShare() {
@@ -1443,14 +1734,25 @@
   async function initDevices() {
     const stored = loadStoredId('reel.orientation');
     state.orientation = ORIENTATIONS[stored] ? stored : 'landscape';
+    state.squareSplit = loadStoredId('reel.squareSplit') === 'rows' ? 'rows' : 'cols';
     state.split = loadStoredId('reel.split') === '1';
     state.rotate = !state.split && loadStoredId('reel.rotate') === '1';
-    const storedCut = Number(loadStoredId('reel.cutSeconds'));
-    state.cutSeconds = Number.isFinite(storedCut) && storedCut > 0 ? storedCut : 1.5;
+    state.look = !state.split && !state.rotate && loadStoredId('reel.look') === '1';
+    if (state.look && window.__reelGaze) window.__reelGaze.boot();
+    let storedCut = Number(loadStoredId('reel.cutSeconds'));
+    if (loadStoredId('reel.cutDefaultV') !== '1') {
+      if (!Number.isFinite(storedCut) || storedCut === 1.5) storedCut = 1;
+      storeId('reel.cutSeconds', String(storedCut));
+      storeId('reel.cutDefaultV', '1');
+    }
+    state.cutSeconds = Number.isFinite(storedCut) && storedCut > 0 ? storedCut : 1;
     renderSplitButton();
     renderOrientationButtons();
     orientationButtons().forEach((btn) => {
       btn.addEventListener('click', () => setOrientation(btn.getAttribute('data-orientation')));
+    });
+    document.querySelectorAll('[data-square-split]').forEach((btn) => {
+      btn.addEventListener('click', () => setSquareSplit(btn.getAttribute('data-square-split')));
     });
 
     const { preferredCamera, preferredMic } = await fetchPreferredNames();
@@ -1550,12 +1852,22 @@
       splitBtn.addEventListener('click', () => setMultiMode('split'));
     }
     if (rotateBtn) {
-      rotateBtn.addEventListener('click', () => setMultiMode('rotate'));
+      rotateBtn.addEventListener('click', () => {
+        setMultiMode('rotate');
+        const wrap = rotateBtn.closest('.mode-btn-wrap');
+        if (wrap && window.matchMedia('(max-width: 860px)').matches) {
+          wrap.classList.toggle('is-cut-open');
+        }
+      });
     }
+    if (lookBtn) lookBtn.addEventListener('click', () => setMultiMode('look'));
+    setInterval(() => {
+      gazeRound().catch(() => {});
+    }, 150);
     if (cutSecondsInput) {
       const saveCut = () => {
         let value = Number(String(cutSecondsInput.value).replace(',', '.'));
-        if (!Number.isFinite(value)) value = 1.5;
+        if (!Number.isFinite(value)) value = 1;
         value = Math.max(0.3, Math.min(30, Math.round(value * 10) / 10));
         state.cutSeconds = value;
         cutSecondsInput.value = String(value);
@@ -1592,6 +1904,17 @@
   }
 
   state.ensureStream = ensureStream;
+  state.beginLookTake = beginLookTake;
+  state.takeLookCuts = function () {
+    if (!state.look || !Array.isArray(state.lookCuts) || !state.lookCuts.length) return null;
+    return state.lookCuts.map((item) => ({ t: item.t, camera: item.camera }));
+  };
+  state.cameraLayout = function () {
+    if (state.look) return 'look';
+    if (state.rotate) return 'cut';
+    if (state.split) return 'split';
+    return '';
+  };
   state.cameraLabels = function () {
     if (!multiActive()) return [];
     const labels = [];
@@ -1602,12 +1925,17 @@
         return;
       }
       const phoneId = id.indexOf('phone:') === 0 ? id.slice(6) : id;
-      const cam = (state.cameras || []).find((item) => item.deviceId === id);
+      const localCams = state.cameras || [];
+      const localIndex = localCams.findIndex((item) => item.deviceId === id);
+      if (localIndex >= 0) {
+        labels.push(webcamLabel(localIndex, localCams.length));
+        return;
+      }
       const phone =
         window.__reelPhone && window.__reelPhone.cameras
           ? window.__reelPhone.cameras().find((item) => item.id === phoneId || item.deviceId === id)
           : null;
-      labels.push((cam && cam.label) || (phone && phone.label) || id);
+      labels.push((phone && phone.label) || id);
     });
     return labels;
   };

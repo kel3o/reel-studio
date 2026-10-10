@@ -7,6 +7,9 @@
     phase: 'idle', // idle | ready | countdown | recording | paused | review | done
     mediaRecorder: null,
     audioRecorder: null,
+    cameraRecorders: [],
+    pendingCameraFiles: null,
+    pendingLookCuts: null,
     chunks: [],
     audioChunks: [],
     pendingAudioFile: null,
@@ -271,6 +274,11 @@
   let lastFrameTs = 0;
   let recordStartTs = 0;
   let clockSeconds = 0;
+  state.recordSeconds = function () {
+    if (state.phase === 'recording') return Math.max(0, (performance.now() - recordStartTs) / 1000);
+    if (state.phase === 'paused') return Math.max(0, clockSeconds);
+    return 0;
+  };
   let finishToEditor = false;
   let browseOpen = false;
   let historyHeld = false;
@@ -328,10 +336,17 @@
     const paused = state.phase === 'paused';
     const counting = state.phase === 'countdown';
     floatBox.classList.toggle('is-paused', paused);
+    const browsing = browseLayer && !browseLayer.hidden;
+    floatBox.hidden = !(recording || paused || counting || browsing);
     if (floatStartBtn) {
-      floatStartBtn.hidden = recording || paused;
+      floatStartBtn.hidden = recording || paused || counting;
       floatStartBtn.disabled = counting;
       if (!counting) floatStartBtn.textContent = 'شروع ضبط';
+    }
+    const floatCount = document.getElementById('rec-float-count');
+    if (floatCount && !counting) {
+      floatCount.hidden = true;
+      floatCount.textContent = '';
     }
     if (floatStopBtn) floatStopBtn.hidden = !recording && !paused;
     if (floatPauseBtn) floatPauseBtn.hidden = !recording;
@@ -339,10 +354,12 @@
   }
 
   function setFloatCount(n) {
-    if (!floatStartBtn) return;
-    floatStartBtn.hidden = false;
-    floatStartBtn.disabled = true;
-    floatStartBtn.textContent = faNum(n);
+    const floatCount = document.getElementById('rec-float-count');
+    if (floatCount) {
+      floatCount.hidden = false;
+      floatCount.textContent = faNum(n);
+    }
+    if (floatStartBtn) floatStartBtn.hidden = true;
   }
 
   function paintFloatPreview() {
@@ -582,6 +599,7 @@
     }
     if (liveCam.srcObject !== stream) liveCam.srcObject = stream;
     if (window.__reel && window.__reel.resetCutClock) window.__reel.resetCutClock();
+    if (window.__reel && window.__reel.beginLookTake) window.__reel.beginLookTake();
     state.phase = 'recording';
     holdHistory();
     updateRecordButton();
@@ -600,7 +618,9 @@
     state.chunks = [];
     state.audioChunks = [];
     state.pendingAudioFile = null;
+    state.pendingCameraFiles = null;
     state.audioRecorder = null;
+    state.cameraRecorders = [];
     const liveVideo = stream.getVideoTracks().filter((t) => t.readyState === 'live');
     if (!liveVideo.length) {
       setStatus('تصویر دوربین برای ضبط آماده نیست');
@@ -608,16 +628,46 @@
       updateRecordButton();
       return;
     }
-    // Record the live preview stream itself. Cloning a canvas capture track
-    // yields a black picture, and a second recorder can drop that video.
+    // The preview stream is the switched picture. Cut mode also records each
+    // camera from its own canvas. Cloning the preview track goes black, so
+    // those recorders must not share it.
     const mimeType = pickMimeType();
-    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    startCameraRecorders(mimeType);
+    let recorder;
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    } catch (err) {
+      (state.cameraRecorders || []).forEach((item) => {
+        try {
+          if (item.recorder && item.recorder.state !== 'inactive') item.recorder.stop();
+        } catch (stopErr) {}
+      });
+      state.cameraRecorders = [];
+      setStatus('ضبط شروع نشد');
+      state.phase = 'ready';
+      updateRecordButton();
+      return;
+    }
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) state.chunks.push(e.data);
     };
     recorder.onstop = onRecordingStopped;
     state.mediaRecorder = recorder;
-    recorder.start(250);
+    try {
+      recorder.start(250);
+    } catch (err) {
+      (state.cameraRecorders || []).forEach((item) => {
+        try {
+          if (item.recorder && item.recorder.state !== 'inactive') item.recorder.stop();
+        } catch (stopErr) {}
+      });
+      state.cameraRecorders = [];
+      state.mediaRecorder = null;
+      setStatus('ضبط شروع نشد');
+      state.phase = 'ready';
+      updateRecordButton();
+      return;
+    }
     pushTeleprompter({ visible: true, scrolling: true, resetScroll: true });
   }
 
@@ -629,11 +679,13 @@
     }
     try {
       rec.pause();
+      pauseCameraRecorders();
     } catch (err) {
       setStatus('توقف کوتاه نشد');
       return;
     }
     clockSeconds = Math.max(0, (performance.now() - recordStartTs) / 1000);
+    if (window.__reel && window.__reel.pauseCutClock) window.__reel.pauseCutClock();
     state.phase = 'paused';
     updateRecordButton();
     setStatus('توقف کوتاه');
@@ -645,11 +697,13 @@
     if (state.phase !== 'paused' || !rec || rec.state !== 'paused' || typeof rec.resume !== 'function') return;
     try {
       rec.resume();
+      resumeCameraRecorders();
     } catch (err) {
       setStatus('شروع مجدد نشد');
       return;
     }
     recordStartTs = performance.now() - clockSeconds * 1000;
+    if (window.__reel && window.__reel.resumeCutClock) window.__reel.resumeCutClock();
     state.phase = 'recording';
     updateRecordButton();
     setStatus('ادامه ضبط');
@@ -665,9 +719,77 @@
     } catch (err) {}
   }
 
-  async function uploadClip(blob, paragraphIndex, take) {
+  function cameraSlots() {
+    const reel = window.__reel;
+    if (!reel || (!reel.rotate && !reel.look) || !reel.slotViews || !Array.isArray(reel.splitSlots)) return [];
+    if (reel.splitSlots.length < 2) return [];
+    return reel.splitSlots.map((slot, index) => {
+      const view = reel.slotViews[slot.id];
+      return view && view.stream ? { index: index, stream: view.stream } : null;
+    }).filter(Boolean);
+  }
+
+  function startCameraRecorders(mimeType) {
+    state.cameraRecorders = [];
+    cameraSlots().forEach((slot) => {
+      const live = slot.stream.getVideoTracks().some((track) => track.readyState === 'live');
+      if (!live) return;
+      const chunks = [];
+      let rec;
+      try {
+        rec = mimeType ? new MediaRecorder(slot.stream, { mimeType }) : new MediaRecorder(slot.stream);
+      } catch (err) {
+        return;
+      }
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      try {
+        rec.start(250);
+      } catch (err) {
+        return;
+      }
+      state.cameraRecorders.push({ index: slot.index, chunks: chunks, recorder: rec });
+    });
+  }
+
+  function pauseCameraRecorders() {
+    (state.cameraRecorders || []).forEach((item) => {
+      if (!item.recorder || item.recorder.state !== 'recording') return;
+      try {
+        item.recorder.pause();
+      } catch (err) {}
+    });
+  }
+
+  function resumeCameraRecorders() {
+    (state.cameraRecorders || []).forEach((item) => {
+      if (!item.recorder || item.recorder.state !== 'paused') return;
+      try {
+        item.recorder.resume();
+      } catch (err) {}
+    });
+  }
+
+  function stopOneRecorder(rec) {
+    return new Promise((resolve) => {
+      if (!rec || rec.state === 'inactive') {
+        resolve();
+        return;
+      }
+      rec.addEventListener('stop', () => resolve(), { once: true });
+      try {
+        rec.stop();
+      } catch (err) {
+        resolve();
+      }
+    });
+  }
+
+  async function uploadClip(blob, paragraphIndex, take, cameraIndex) {
     const nn = String(paragraphIndex + 1).padStart(2, '0');
-    const query = `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}`;
+    let query = `/api/clip?slug=${encodeURIComponent(state.slug)}&paragraph=${nn}&take=${take}`;
+    if (cameraIndex != null) query += '&camera=' + encodeURIComponent(String(cameraIndex));
     const res = await fetch(query, { method: 'POST', body: blob });
     const data = await res.json();
     return data;
@@ -676,6 +798,9 @@
   async function onRecordingStopped() {
     const toEditor = finishToEditor;
     finishToEditor = false;
+    const cameraTakes = (state.cameraRecorders || []).slice();
+    state.cameraRecorders = [];
+    await Promise.all(cameraTakes.map((item) => stopOneRecorder(item.recorder)));
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     const p = state.paragraphs[state.current];
     const take = p.takes.length + 1;
@@ -695,11 +820,32 @@
     p.takes.push(fileName);
     p.pendingWordTimings = recordedWordTimings.slice();
     state.pendingAudioFile = uploaded.audioFile || null;
+    const cameraFiles = [];
+    for (let i = 0; i < cameraTakes.length; i++) {
+      const item = cameraTakes[i];
+      if (!item.chunks.length) continue;
+      try {
+        const cameraBlob = new Blob(item.chunks, { type: 'video/webm' });
+        const saved = await uploadClip(cameraBlob, p.index, take, item.index);
+        if (saved && saved.file) cameraFiles[item.index] = saved.file;
+      } catch (err) {}
+    }
+    state.pendingCameraFiles = cameraFiles.some(Boolean) ? cameraFiles.map((name) => name || '') : null;
+    const reel = window.__reel;
+    state.pendingLookCuts = reel && typeof reel.takeLookCuts === 'function' ? reel.takeLookCuts() : null;
 
     if (toEditor) {
       p.accepted = fileName;
       p.acceptedAudio = state.pendingAudioFile || null;
       state.pendingAudioFile = null;
+      if (state.pendingCameraFiles && state.pendingCameraFiles.length) {
+        p.cameraFiles = state.pendingCameraFiles.slice();
+      }
+      state.pendingCameraFiles = null;
+      if (Array.isArray(state.pendingLookCuts) && state.pendingLookCuts.length) {
+        p.lookCuts = state.pendingLookCuts.map((item) => ({ t: item.t, camera: item.camera }));
+      }
+      state.pendingLookCuts = null;
       if (recordedWordTimings.length) p.wordTimings = recordedWordTimings.slice();
       p.pendingWordTimings = null;
       p.duration = clockSeconds > 0.05 ? Math.round(clockSeconds * 1000) / 1000 : null;
@@ -744,6 +890,8 @@
         takes: p.takes,
         accepted: p.accepted,
         acceptedAudio: p.acceptedAudio || null,
+        cameraFiles: Array.isArray(p.cameraFiles) && p.cameraFiles.some(Boolean) ? p.cameraFiles : undefined,
+        lookCuts: Array.isArray(p.lookCuts) && p.lookCuts.length ? p.lookCuts : undefined,
         duration: p.duration || null,
         wordTimings: Array.isArray(p.wordTimings) ? p.wordTimings : undefined,
       })),
@@ -753,6 +901,13 @@
       if (devices && typeof devices.cameraLabels === 'function') {
         const labels = devices.cameraLabels();
         if (Array.isArray(labels) && labels.length > 1) body.cameras = labels;
+      }
+      if (devices && typeof devices.cameraLayout === 'function') {
+        const layout = devices.cameraLayout();
+        body.cameraLayout = layout === 'cut' || layout === 'split' || layout === 'look' ? layout : '';
+        if (body.cameraLayout === 'cut' && typeof devices.cutSecondsValue === 'function') {
+          body.cutSeconds = devices.cutSecondsValue();
+        }
       }
     } catch (err) {}
     try {
@@ -790,6 +945,14 @@
     p.accepted = p.takes[p.takes.length - 1];
     p.acceptedAudio = state.pendingAudioFile || null;
     state.pendingAudioFile = null;
+    if (state.pendingCameraFiles && state.pendingCameraFiles.length) {
+      p.cameraFiles = state.pendingCameraFiles.slice();
+    }
+    state.pendingCameraFiles = null;
+    if (Array.isArray(state.pendingLookCuts) && state.pendingLookCuts.length) {
+      p.lookCuts = state.pendingLookCuts.map((item) => ({ t: item.t, camera: item.camera }));
+    }
+    state.pendingLookCuts = null;
     if (Array.isArray(p.pendingWordTimings) && p.pendingWordTimings.length) {
       p.wordTimings = p.pendingWordTimings.slice();
     }
@@ -850,6 +1013,7 @@
     liveCam.hidden = false;
     reviewVideo.pause();
     state.pendingAudioFile = null;
+    state.pendingLookCuts = null;
     state.phase = 'ready';
     updateRecordButton();
     setStatus('آماده، دوباره ضبط کن');
@@ -1169,6 +1333,7 @@
         takes: prior ? prior.takes || [] : [],
         accepted: prior ? prior.accepted || null : null,
         acceptedAudio: prior ? prior.acceptedAudio || null : null,
+        cameraFiles: prior && Array.isArray(prior.cameraFiles) ? prior.cameraFiles.slice() : undefined,
         duration: prior && Number(prior.duration) > 0 ? Number(prior.duration) : null,
         wordTimings: prior && Array.isArray(prior.wordTimings) ? prior.wordTimings : null,
       };

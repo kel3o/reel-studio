@@ -17,6 +17,7 @@
   const caption = document.getElementById('caption');
   const previewZoomInput = document.getElementById('preview-zoom');
   const previewZoomOut = document.getElementById('preview-zoom-out');
+  const videoGuidesInput = document.getElementById('video-guides');
   const playBtn = document.getElementById('play-btn');
   const undoBtn = document.getElementById('undo-btn');
   const redoBtn = document.getElementById('redo-btn');
@@ -35,12 +36,19 @@
   const highlightFields = document.getElementById('highlight-fields');
   const highlightOpacityWrap = document.getElementById('highlight-opacity-wrap');
   const highlightColor = document.getElementById('cap-highlight-color');
+  const backgroundInput = document.getElementById('cap-background');
+  const backgroundFields = document.getElementById('background-fields');
+  const backgroundOpacityWrap = document.getElementById('background-opacity-wrap');
+  const backgroundColor = document.getElementById('cap-background-color');
+  const backgroundOpacityInput = document.getElementById('cap-background-opacity');
+  const backgroundOpacityOut = document.getElementById('cap-background-opacity-out');
   const opacityInput = document.getElementById('cap-opacity');
   const opacityOut = document.getElementById('cap-opacity-out');
   const textOpacityInput = document.getElementById('cap-text-opacity');
   const textOpacityOut = document.getElementById('cap-text-opacity-out');
   const wordInput = document.getElementById('cap-word');
   const rebuildBtn = document.getElementById('rebuild-btn');
+  const saveBtn = document.getElementById('save-btn');
   const renderBtn = document.getElementById('render-btn');
   const renderLink = document.getElementById('render-link');
   const openExportBtn = document.getElementById('open-export');
@@ -69,7 +77,21 @@
   const addPauseBtn = document.getElementById('tl-add-pause');
   const addBlankBtn = document.getElementById('tl-add-blank');
   const deleteWordBtn = document.getElementById('tl-delete-word');
+  const breakCaptionBtn = document.getElementById('tl-break-caption');
   const addMenu = document.getElementById('tl-add-menu');
+  const shapeTools = document.getElementById('tl-shape-tools');
+  const shapeColorInput = document.getElementById('shape-color');
+  const shapeDiameterInput = document.getElementById('shape-diameter');
+  const shapeDiameterOut = document.getElementById('shape-diameter-out');
+  const shapeDiameterWrap = document.getElementById('shape-diameter-wrap');
+  const shapeWidthInput = document.getElementById('shape-width');
+  const shapeWidthOut = document.getElementById('shape-width-out');
+  const shapeWidthWrap = document.getElementById('shape-width-wrap');
+  const shapeHeightInput = document.getElementById('shape-height');
+  const shapeHeightOut = document.getElementById('shape-height-out');
+  const shapeHeightWrap = document.getElementById('shape-height-wrap');
+  const shapeStrokeInput = document.getElementById('shape-stroke');
+  const shapeStrokeOut = document.getElementById('shape-stroke-out');
   const LANE_LIMIT = 5;
 
   const SPECIAL_SPEEDS = [3, 4, 5, 10];
@@ -105,13 +127,21 @@
   let saveQueued = false;
   let saving = false;
   let draggingWord = false;
+  let draggingClip = false;
   let draggingCaption = false;
   let clockLive = true;
   let activeIndex = 0;
   let editingWord = false;
   let selectedLaneId = '';
   let textLaneVisible = true;
+  let wordsHidden = false;
   let lanesTouched = false;
+  let videoGuides = false;
+  let cameraLayout = '';
+  let cutSeconds = 1.5;
+  let cutSliced = false;
+  let lookCuts = {};
+  let lookSliced = false;
   let previewZoom = 1;
   let bandUiLock = false;
   const picked = { kind: '', index: -1 };
@@ -192,6 +222,9 @@
       letterSpacing: 0,
       lineHeight: 130,
       wordByWord: false,
+      background: false,
+      backgroundColor: '#000000',
+      backgroundOpacity: 60,
       x: 50,
       y: 86,
     };
@@ -256,7 +289,8 @@
     spokenWordsOnly(list).forEach((word) => {
       const paragraphBreak = current.length && current[0].paragraph !== word.paragraph;
       const tooLong = current.length >= LINE_MAX_WORDS || chars + word.text.length > LINE_MAX_CHARS;
-      if (current.length && (paragraphBreak || tooLong)) {
+      const forced = current.length && word.breakBefore;
+      if (current.length && (paragraphBreak || tooLong || forced)) {
         groups.push(current);
         current = [];
         chars = 0;
@@ -289,13 +323,24 @@
   function clipAt(t) {
     const list = clips.filter((clip) => !isAudioClip(clip));
     if (!list.length) return null;
-    for (let i = 0; i < list.length; i++) {
-      const clip = list[i];
-      if (t < clip.start + clip.duration - 0.001 || i === list.length - 1) {
-        return { clip, local: Math.max(0, Math.min(clip.duration, t - clip.start)) };
-      }
+    const hits = list.filter((clip) => {
+      const lane = laneById(clip.lane);
+      if (lane && lane.hidden) return false;
+      return t >= clip.start - 0.001 && t < clip.start + clip.duration - 0.001;
+    });
+    let clip = null;
+    if (hits.length) {
+      clip = hits
+        .slice()
+        .sort((a, b) => {
+          const ar = lanes.findIndex((lane) => lane.id === a.lane);
+          const br = lanes.findIndex((lane) => lane.id === b.lane);
+          return (ar < 0 ? 99 : ar) - (br < 0 ? 99 : br);
+        })[0];
+    } else {
+      clip = list.find((item) => item.start <= t + 0.001) || list[0];
     }
-    return { clip: list[0], local: 0 };
+    return { clip, local: Math.max(0, Math.min(clip.duration, t - clip.start)) };
   }
 
   function takeUrl(file) {
@@ -342,6 +387,10 @@
     textOpacityInput.value = String(style.textOpacity == null ? 100 : style.textOpacity);
     textOpacityOut.textContent = faNum(style.textOpacity == null ? 100 : style.textOpacity);
     wordInput.checked = !!style.wordByWord;
+    if (backgroundInput) backgroundInput.checked = !!style.background;
+    if (backgroundColor) backgroundColor.value = style.backgroundColor || '#000000';
+    if (backgroundOpacityInput) backgroundOpacityInput.value = String(style.backgroundOpacity == null ? 60 : style.backgroundOpacity);
+    if (backgroundOpacityOut) backgroundOpacityOut.textContent = faNum(style.backgroundOpacity == null ? 60 : style.backgroundOpacity);
     syncHighlightUi();
   }
 
@@ -349,6 +398,9 @@
     const on = !!highlightInput.checked;
     if (highlightFields) highlightFields.hidden = !on;
     if (highlightOpacityWrap) highlightOpacityWrap.hidden = !on;
+    const bg = !!(backgroundInput && backgroundInput.checked);
+    if (backgroundFields) backgroundFields.hidden = !bg;
+    if (backgroundOpacityWrap) backgroundOpacityWrap.hidden = !bg;
   }
 
   function readForm() {
@@ -363,6 +415,10 @@
     style.highlightOpacity = Number(opacityInput.value);
     style.textOpacity = Number(textOpacityInput.value);
     style.wordByWord = wordInput.checked;
+    style.background = !!(backgroundInput && backgroundInput.checked);
+    style.backgroundColor = backgroundColor ? backgroundColor.value : style.backgroundColor;
+    style.backgroundOpacity = backgroundOpacityInput ? Number(backgroundOpacityInput.value) : style.backgroundOpacity;
+    if (backgroundOpacityOut) backgroundOpacityOut.textContent = faNum(style.backgroundOpacity || 0);
     sizeOut.textContent = faNum(style.size);
     wordSpaceOut.textContent = faNum(style.wordSpacing || 0);
     letterSpaceOut.textContent = faNum(style.letterSpacing || 0);
@@ -395,7 +451,286 @@
     if (previewZoomOut) previewZoomOut.textContent = faNum(Math.round(z * 100));
   }
 
+  function clampShape(n, min, max, fallback) {
+    const value = Number(n);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function shapeBox(lane, width, height) {
+    const minSide = Math.max(1, Math.min(width, height));
+    const stroke = clampShape(lane.stroke, 2, 48, 8) * (minSide / 1080);
+    const cx = (clampShape(lane.x, 0, 100, 50) / 100) * width;
+    const cy = (clampShape(lane.y, 0, 100, 40) / 100) * height;
+    if (lane.shape === 'circle') {
+      const axes = circleAxes(lane);
+      const pw = (axes.w / 100) * minSide;
+      const ph = (axes.h / 100) * minSide;
+      return { x: cx - pw / 2, y: cy - ph / 2, w: pw, h: ph, stroke: stroke };
+    }
+    const w = (clampShape(lane.w, 4, 96, 28) / 100) * width;
+    const h = (clampShape(lane.h, 4, 96, 16) / 100) * height;
+    return { x: cx - w / 2, y: cy - h / 2, w: w, h: h, stroke: stroke };
+  }
+
+  function drawShape(ctx, lane, box) {
+    const color = lane.color || '#ff3d1f';
+    ctx.save();
+    ctx.translate(box.x, box.y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = Math.max(1, box.stroke);
+    if (lane.shape === 'circle') {
+      const rx = Math.max(1, box.w / 2 - box.stroke / 2);
+      const ry = Math.max(1, box.h / 2 - box.stroke / 2);
+      ctx.beginPath();
+      ctx.ellipse(box.w / 2, box.h / 2, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (lane.shape === 'arrow') {
+      const head = Math.max(box.stroke * 2.4, Math.min(box.h * 0.85, box.w * 0.28));
+      const mid = box.h / 2;
+      const pad = box.stroke;
+      ctx.beginPath();
+      ctx.moveTo(pad, mid);
+      ctx.lineTo(Math.max(pad, box.w - head), mid);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(box.w - pad, mid);
+      ctx.lineTo(box.w - head, mid - head * 0.42);
+      ctx.lineTo(box.w - head, mid + head * 0.42);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      const inset = box.stroke / 2;
+      ctx.strokeRect(inset, inset, Math.max(1, box.w - box.stroke), Math.max(1, box.h - box.stroke));
+    }
+    ctx.restore();
+  }
+
+  function activeShapeLanes() {
+    return lanes.filter((lane) => lane.kind === 'shape' && !lane.hidden && clipOnLane(lane.id, time));
+  }
+
+  function renderShapes() {
+    const layer = document.getElementById('shape-layer');
+    const canvas = document.getElementById('shape-view');
+    const host = document.getElementById('edit-frame');
+    if (!layer || !canvas || !host) return;
+    const width = Math.max(1, Math.round(host.clientWidth));
+    const height = Math.max(1, Math.round(host.clientHeight));
+    const active = activeShapeLanes();
+    if (!active.length || width < 2 || height < 2) {
+      layer.hidden = true;
+      canvas.hidden = true;
+      layer.replaceChildren();
+      layer.dataset.ids = '';
+      return;
+    }
+    layer.hidden = false;
+    canvas.hidden = false;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    const ids = active.map((lane) => lane.id).join(',');
+    if (layer.dataset.ids !== ids) {
+      layer.replaceChildren();
+      layer.dataset.ids = ids;
+      active.forEach((lane) => {
+        const hit = document.createElement('div');
+        hit.className = 'shape-hit';
+        hit.dataset.lane = lane.id;
+        hit.addEventListener('pointerdown', (event) => beginShapeDrag(event, lane.id));
+        ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'].forEach((edge) => {
+          const handle = document.createElement('button');
+          handle.type = 'button';
+          handle.className = 'shape-handle';
+          handle.dataset.edge = edge;
+          handle.setAttribute('aria-label', 'اندازه');
+          handle.addEventListener('pointerdown', (event) => beginShapeResize(event, lane.id, edge));
+          hit.appendChild(handle);
+        });
+        layer.appendChild(hit);
+      });
+    }
+    active.forEach((lane) => {
+      const box = shapeBox(lane, width, height);
+      drawShape(ctx, lane, box);
+      const hit = layer.querySelector('.shape-hit[data-lane="' + lane.id + '"]');
+      if (!hit) return;
+      hit.classList.toggle('is-selected', lane.id === selectedLaneId);
+      hit.title = shapeTitle(lane.shape);
+      hit.style.left = box.x + 'px';
+      hit.style.top = box.y + 'px';
+      hit.style.width = Math.max(8, box.w) + 'px';
+      hit.style.height = Math.max(8, box.h) + 'px';
+    });
+  }
+
+  function selectShapeLane(laneId) {
+    selectedLaneId = laneId;
+    const index = clips.findIndex((clip) => clip.lane === laneId);
+    if (index >= 0) {
+      picked.kind = 'clip';
+      picked.index = index;
+    }
+    showPicked();
+    renderShapes();
+  }
+
+  function beginShapeDrag(event, laneId) {
+    if (event.button !== 0) return;
+    if (event.target && event.target.closest && event.target.closest('.shape-handle')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = laneById(laneId);
+    const host = document.getElementById('edit-frame');
+    if (!lane || !host) return;
+    selectShapeLane(laneId);
+    const rect = host.getBoundingClientRect();
+    const originX = lane.x;
+    const originY = lane.y;
+    const sx = event.clientX;
+    const sy = event.clientY;
+    function move(ev) {
+      lane.x = clampShape(originX + ((ev.clientX - sx) / Math.max(1, rect.width)) * 100, 0, 100, originX);
+      lane.y = clampShape(originY + ((ev.clientY - sy) / Math.max(1, rect.height)) * 100, 0, 100, originY);
+      syncShapeControls(lane);
+      renderShapes();
+    }
+    function up() {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      scheduleSave('shape-move');
+    }
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  function circleAxes(lane) {
+    const d = clampShape(lane.d, 4, 96, 22);
+    if (lane.ellipse) {
+      return {
+        w: clampShape(lane.w, 4, 96, d),
+        h: clampShape(lane.h, 4, 96, d),
+      };
+    }
+    return { w: d, h: d };
+  }
+
+  function beginShapeResize(event, laneId, edge) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = laneById(laneId);
+    const host = document.getElementById('edit-frame');
+    if (!lane || !host) return;
+    const side = edge || 'se';
+    selectShapeLane(laneId);
+    const rect = host.getBoundingClientRect();
+    const hostW = Math.max(1, rect.width);
+    const hostH = Math.max(1, rect.height);
+    const minSide = Math.max(1, Math.min(hostW, hostH));
+    if (lane.shape === 'circle' && !lane.ellipse) {
+      const d = clampShape(lane.d, 4, 96, 22);
+      lane.w = d;
+      lane.h = d;
+    }
+    const box = shapeBox(lane, hostW, hostH);
+    const left = box.x;
+    const top = box.y;
+    const right = box.x + box.w;
+    const bottom = box.y + box.h;
+    const sx = event.clientX;
+    const sy = event.clientY;
+    function move(ev) {
+      const dx = ev.clientX - sx;
+      const dy = ev.clientY - sy;
+      let nextLeft = left;
+      let nextTop = top;
+      let nextRight = right;
+      let nextBottom = bottom;
+      if (side.indexOf('e') !== -1) nextRight = right + dx;
+      if (side.indexOf('w') !== -1) nextLeft = left + dx;
+      if (side.indexOf('s') !== -1) nextBottom = bottom + dy;
+      if (side.indexOf('n') !== -1) nextTop = top + dy;
+      const minPx = 14;
+      if (nextRight - nextLeft < minPx) {
+        if (side.indexOf('w') !== -1) nextLeft = nextRight - minPx;
+        else nextRight = nextLeft + minPx;
+      }
+      if (nextBottom - nextTop < minPx) {
+        if (side.indexOf('n') !== -1) nextTop = nextBottom - minPx;
+        else nextBottom = nextTop + minPx;
+      }
+      const pixelW = nextRight - nextLeft;
+      const pixelH = nextBottom - nextTop;
+      lane.x = clampShape((((nextLeft + nextRight) / 2) / hostW) * 100, 0, 100, lane.x);
+      lane.y = clampShape((((nextTop + nextBottom) / 2) / hostH) * 100, 0, 100, lane.y);
+      const touchX = side.indexOf('e') !== -1 || side.indexOf('w') !== -1;
+      const touchY = side.indexOf('n') !== -1 || side.indexOf('s') !== -1;
+      if (lane.shape === 'circle') {
+        if (touchX) lane.w = clampShape((pixelW / minSide) * 100, 4, 96, lane.w);
+        if (touchY) lane.h = clampShape((pixelH / minSide) * 100, 4, 96, lane.h);
+        lane.ellipse = Math.abs(lane.w - lane.h) > 0.4;
+        if (!lane.ellipse) lane.d = lane.w;
+      } else {
+        if (touchX) lane.w = clampShape((pixelW / hostW) * 100, 4, 96, lane.w);
+        if (touchY) lane.h = clampShape((pixelH / hostH) * 100, 4, 96, lane.h);
+      }
+      syncShapeControls(lane);
+      renderShapes();
+    }
+    function up() {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      scheduleSave('shape-size');
+    }
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  function syncShapeControls(lane) {
+    if (!lane || lane.kind !== 'shape') return;
+    const circle = lane.shape === 'circle';
+    const ellipse = circle && !!lane.ellipse;
+    const arrow = lane.shape === 'arrow';
+    if (shapeDiameterWrap) shapeDiameterWrap.hidden = !circle || ellipse;
+    if (shapeWidthWrap) {
+      shapeWidthWrap.hidden = circle && !ellipse;
+      const widthLabel = shapeWidthWrap.childNodes[0];
+      if (widthLabel && widthLabel.nodeType === 3) widthLabel.nodeValue = arrow ? 'طول ' : 'عرض ';
+    }
+    if (shapeHeightWrap) shapeHeightWrap.hidden = circle && !ellipse;
+    if (shapeColorInput) shapeColorInput.value = lane.color || '#ff3d1f';
+    if (shapeDiameterInput) shapeDiameterInput.value = String(Math.round(clampShape(lane.d, 6, 80, 22)));
+    if (shapeDiameterOut) shapeDiameterOut.textContent = faNum(shapeDiameterInput ? shapeDiameterInput.value : lane.d);
+    if (shapeWidthInput) shapeWidthInput.value = String(Math.round(clampShape(lane.w, 6, 90, 28)));
+    if (shapeWidthOut) shapeWidthOut.textContent = faNum(shapeWidthInput ? shapeWidthInput.value : lane.w);
+    if (shapeHeightInput) shapeHeightInput.value = String(Math.round(clampShape(lane.h, 4, 90, 16)));
+    if (shapeHeightOut) shapeHeightOut.textContent = faNum(shapeHeightInput ? shapeHeightInput.value : lane.h);
+    if (shapeStrokeInput) shapeStrokeInput.value = String(Math.round(clampShape(lane.stroke, 2, 36, 8)));
+    if (shapeStrokeOut) shapeStrokeOut.textContent = faNum(shapeStrokeInput ? shapeStrokeInput.value : lane.stroke);
+  }
+
+  function selectedShapeLane() {
+    const lane = laneById(selectedLaneId);
+    if (lane && lane.kind === 'shape') return lane;
+    if (picked.kind === 'clip' && clips[picked.index] && isShapeClip(clips[picked.index])) {
+      return laneById(clips[picked.index].lane);
+    }
+    return null;
+  }
+
   function renderCaption() {
+    renderShapes();
+    if (capLayer) capLayer.classList.toggle('is-captions-hidden', !!wordsHidden);
+    if (wordsHidden) {
+      caption.replaceChildren();
+      return;
+    }
     const scale = previewScale();
     const box = style.size * scale;
     const gapPx = Math.max(0, Number(style.wordSpacing) || 0) * scale;
@@ -409,6 +744,16 @@
       capLayer.style.top = style.y + '%';
     }
     caption.classList.add('is-line');
+    caption.classList.toggle('has-bg', !!style.background);
+    if (style.background) {
+      caption.style.background = rgba(style.backgroundColor || '#000000', style.backgroundOpacity == null ? 60 : style.backgroundOpacity);
+      caption.style.padding = '0.12em 0.32em';
+      caption.style.textShadow = 'none';
+    } else {
+      caption.style.background = 'transparent';
+      caption.style.padding = '0';
+      caption.style.textShadow = '';
+    }
     FONT_CLASS.forEach((key) => caption.classList.remove('font-' + key));
     caption.classList.add('font-' + (style.font || 'vazir'));
     caption.replaceChildren();
@@ -493,6 +838,7 @@
     if (editingWord) return;
     wordLane.replaceChildren();
     wordLane.hidden = !textLaneVisible;
+    wordLane.classList.toggle('is-hidden', !!wordsHidden);
     if (tlLabels) {
       const wordLabel = tlLabels.querySelector('[data-lane="__words__"]');
       if (wordLabel) wordLabel.hidden = !textLaneVisible;
@@ -506,7 +852,10 @@
       const blank = !!word.blank;
       const pause = !blank && !!(word.pause || !String(word.text || '').trim());
       chip.className =
-        'tl-word' + (blank ? ' tl-word-blank' : '') + (pause ? ' tl-word-pause' : '');
+        'tl-word' +
+        (blank ? ' tl-word-blank' : '') +
+        (pause ? ' tl-word-pause' : '') +
+        (!blank && !pause && word.breakBefore ? ' is-break' : '');
       chip.dir = 'rtl';
       chip.textContent = blank || pause ? '' : captionText(word.text);
       if (blank) chip.title = 'متن بدون زیرنویس';
@@ -544,7 +893,7 @@
 
   function videoLaneList() {
     ensureLaneClips();
-    return lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'text');
+    return lanes.filter((lane) => isPictureLane(lane));
   }
 
   function audioLane() {
@@ -582,6 +931,24 @@
     return isAudioLaneId(clip.lane);
   }
 
+  function isShapeName(value) {
+    return value === 'circle' || value === 'rect' || value === 'arrow';
+  }
+
+  function isShapeClip(clip) {
+    return !!(clip && isShapeName(clip.shape));
+  }
+
+  function isPictureLane(lane) {
+    return !!(lane && lane.kind !== 'audio' && lane.kind !== 'text' && lane.kind !== 'shape');
+  }
+
+  function shapeTitle(shape) {
+    if (shape === 'rect') return 'مستطیل';
+    if (shape === 'arrow') return 'فلش';
+    return 'دایره';
+  }
+
   function laneHasSound(lane) {
     return !!(lane && (lane.kind === 'audio' || (lane.kind === 'file' && lane.withAudio)));
   }
@@ -598,8 +965,28 @@
     return 'ویدیو';
   }
 
-  function multiView() {
+  function guidesFromDoc(doc) {
+    if (doc && typeof doc.videoGuides === 'boolean') return doc.videoGuides;
+    if (doc && (doc.cameraLayout === 'cut' || doc.cameraLayout === 'look')) return false;
+    if (doc && doc.cameraLayout === 'split') return true;
+    return !!(doc && Array.isArray(doc.cameras) && doc.cameras.length > 1);
+  }
+
+  function visibleVideoLanes() {
+    return videoLaneList().filter((lane) => !lane.hidden);
+  }
+
+  function pictureShown() {
     const visual = videoLaneList();
+    if (!visual.length) return true;
+    return visual.some((lane) => !lane.hidden);
+  }
+
+  function multiView() {
+    if (cameraLayout === 'cut' || cameraLayout === 'look') return false;
+    if (!videoGuides) return false;
+    const visual = visibleVideoLanes();
+    if (!visual.length) return false;
     if (visual.length > 1) return true;
     return visual.some((lane) => lane.kind === 'band' && Number(lane.bands) > 1);
   }
@@ -622,11 +1009,199 @@
     return String(clip.paragraph) + ':' + round3(Number(clip.start) || 0);
   }
 
+  function sliceCutClip(clip, laneIds, interval) {
+    const ids = Array.isArray(laneIds) ? laneIds.filter(Boolean) : [];
+    const pieces = [];
+    if (!clip || !ids.length) return pieces;
+    const total = Number(clip.duration) || 0;
+    const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
+    const baseSrc = Math.max(0, Number(clip.srcIn) || 0);
+    const origin = Number(clip.start) || 0;
+    const step = Math.min(30, Math.max(0.3, Number(interval) || 1.5));
+    let offset = 0;
+    let index = 0;
+    while (offset < total - 0.02 && index < 4000) {
+      const span = Math.min(step, total - offset);
+      if (span < 0.05) break;
+      const laneId = ids[index % ids.length];
+      pieces.push(
+        Object.assign({}, clip, {
+          start: round3(origin + offset),
+          duration: round3(span),
+          srcIn: round3(baseSrc + offset * speed),
+          srcSpan: round3(span * speed),
+          speed: speed,
+          volume: 0,
+          camera: laneId,
+          lane: laneId,
+        })
+      );
+      offset += span;
+      index += 1;
+    }
+    return pieces;
+  }
+
+  function expandCutClips(list, laneIds, interval) {
+    const clipsIn = Array.isArray(list) ? list.slice() : [];
+    const ids = Array.isArray(laneIds) ? laneIds.filter(Boolean) : [];
+    if (ids.length < 2) return clipsIn;
+    const videos = clipsIn.filter((clip) => clip && !isAudioClip(clip) && isTakeVideoFile(clip.file));
+    const groups = new Map();
+    videos.forEach((clip) => {
+      const key = [
+        clip.file,
+        clip.paragraph,
+        round3(Number(clip.start) || 0),
+        round3(Number(clip.duration) || 0),
+        round3(Number(clip.srcIn) || 0),
+      ].join('|');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(clip);
+    });
+    const masters = [];
+    const drop = new Set();
+    groups.forEach((items) => {
+      if (items.length < 2) return;
+      masters.push(items[0]);
+      items.forEach((item) => drop.add(item));
+    });
+    if (!masters.length && !cutSliced) {
+      const byTake = new Map();
+      videos.forEach((clip) => {
+        const key = String(clip.paragraph) + ':' + clip.file;
+        if (!byTake.has(key)) byTake.set(key, []);
+        byTake.get(key).push(clip);
+      });
+      byTake.forEach((items) => {
+        if (items.length !== 1) return;
+        masters.push(items[0]);
+        drop.add(items[0]);
+      });
+    }
+    if (!masters.length) return clipsIn;
+    const kept = clipsIn.filter((clip) => !drop.has(clip));
+    const slices = [];
+    masters.forEach((master) => {
+      sliceCutClip(master, ids, interval).forEach((piece) => slices.push(piece));
+    });
+    return kept.concat(slices);
+  }
+
+  function clientLookCuts(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    raw.forEach((item) => {
+      const t = round3(Math.max(0, Number(item && item.t) || 0));
+      const camera = Math.round(Number(item && item.camera));
+      if (!Number.isFinite(camera) || camera < 0 || camera > 7) return;
+      const prev = out[out.length - 1];
+      if (prev && t + 0.001 < prev.t) return;
+      if (prev && prev.camera === camera) return;
+      if (prev && t - prev.t < 0.2) {
+        prev.camera = camera;
+        return;
+      }
+      out.push({ t: t, camera: camera });
+    });
+    if (out.length && out[0].t > 0) out.unshift({ t: 0, camera: out[0].camera });
+    const compact = [];
+    out.forEach((item) => {
+      const prev = compact[compact.length - 1];
+      if (prev && prev.camera === item.camera) return;
+      compact.push(item);
+    });
+    return compact;
+  }
+
+  function sliceLookClip(clip, laneIds, cuts) {
+    const ids = Array.isArray(laneIds) ? laneIds.filter(Boolean) : [];
+    const pieces = [];
+    if (!clip || !ids.length) return pieces;
+    const total = Number(clip.duration) || 0;
+    const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
+    const baseSrc = Math.max(0, Number(clip.srcIn) || 0);
+    const origin = Number(clip.start) || 0;
+    let events = clientLookCuts(cuts);
+    if (!events.length) events = [{ t: 0, camera: 0 }];
+    const takeStart = speed > 0 ? baseSrc / speed : baseSrc;
+    for (let i = 0; i < events.length && pieces.length < 400; i++) {
+      const eventEnd = i + 1 < events.length ? events[i + 1].t : takeStart + total;
+      const from = Math.max(takeStart, events[i].t);
+      const to = Math.min(takeStart + total, eventEnd);
+      const span = to - from;
+      if (span < 0.05) continue;
+      const offset = from - takeStart;
+      const lanePos = Math.max(0, Math.min(ids.length - 1, events[i].camera));
+      const laneId = ids[lanePos];
+      pieces.push(
+        Object.assign({}, clip, {
+          start: round3(origin + offset),
+          duration: round3(span),
+          srcIn: round3(baseSrc + offset * speed),
+          srcSpan: round3(span * speed),
+          speed: speed,
+          volume: 0,
+          camera: laneId,
+          lane: laneId,
+        })
+      );
+    }
+    return pieces;
+  }
+
+  function expandLookClips(list, laneIds) {
+    const clipsIn = Array.isArray(list) ? list.slice() : [];
+    const ids = Array.isArray(laneIds) ? laneIds.filter(Boolean) : [];
+    if (ids.length < 2) return clipsIn;
+    const videos = clipsIn.filter((clip) => clip && !isAudioClip(clip) && isTakeVideoFile(clip.file));
+    const groups = new Map();
+    videos.forEach((clip) => {
+      const key = [
+        clip.file,
+        clip.paragraph,
+        round3(Number(clip.start) || 0),
+        round3(Number(clip.duration) || 0),
+        round3(Number(clip.srcIn) || 0),
+      ].join('|');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(clip);
+    });
+    const masters = [];
+    const drop = new Set();
+    groups.forEach((items) => {
+      if (items.length < 2) return;
+      masters.push(items[0]);
+      items.forEach((item) => drop.add(item));
+    });
+    if (!masters.length && !lookSliced) {
+      const byTake = new Map();
+      videos.forEach((clip) => {
+        const key = String(clip.paragraph) + ':' + clip.file;
+        if (!byTake.has(key)) byTake.set(key, []);
+        byTake.get(key).push(clip);
+      });
+      byTake.forEach((items) => {
+        if (items.length !== 1) return;
+        masters.push(items[0]);
+        drop.add(items[0]);
+      });
+    }
+    if (!masters.length) return clipsIn;
+    const kept = clipsIn.filter((clip) => !drop.has(clip));
+    const slices = [];
+    masters.forEach((master) => {
+      const raw = lookCuts[String(master.paragraph)] || lookCuts[master.paragraph] || [];
+      sliceLookClip(master, ids, raw).forEach((piece) => slices.push(piece));
+    });
+    return kept.concat(slices);
+  }
+
   function repairTimeline() {
     const defaults = defaultBandLanesFromCameras();
     const hasBand = lanes.some((lane) => lane.kind === 'band');
-    if (defaults && !hasBand && !lanesTouched) {
-      const keep = lanes.filter((lane) => lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file');
+    if (cameraLayout !== 'cut' && cameraLayout !== 'look' && defaults && !hasBand && !lanesTouched) {
+      const keep = lanes.filter((lane) => lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file' || lane.kind === 'shape');
       lanes = defaults.concat(keep);
     }
 
@@ -637,6 +1212,28 @@
       clip.camera = 'audio';
       if (clip.volume == null || clip.volume < 0.01) clip.volume = 1;
     });
+
+    if ((cameraLayout === 'cut' || cameraLayout === 'look') && Array.isArray(docCameras) && docCameras.length > 1 && !lanesTouched) {
+      const hidden = new Map(lanes.map((lane) => [lane.id, !!lane.hidden]));
+      const keep = lanes.filter((lane) => lane.kind === 'audio' || lane.kind === 'text' || lane.kind === 'file' || lane.kind === 'shape');
+      lanes = docCameras
+        .map((label, index) => ({
+          id: 'cam-' + index,
+          label: label || 'دوربین ' + faNum(index + 1),
+          kind: 'full',
+          band: 0,
+          bands: 1,
+          file: '',
+          weight: 1,
+          panY: 0.5,
+          hidden: !!hidden.get('cam-' + index),
+        }))
+        .concat(keep);
+      const laneIds = docCameras.map((_, index) => 'cam-' + index);
+      clips = cameraLayout === 'look' ? expandLookClips(clips, laneIds) : expandCutClips(clips, laneIds, cutSeconds);
+      ensureAudioLanePresent();
+      return;
+    }
 
     clips.forEach((clip) => {
       if (!isTakeAudioFile(clip.file) || clip.lane !== 'audio') return;
@@ -668,7 +1265,7 @@
       });
     });
 
-    const visual = lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'text');
+    const visual = lanes.filter((lane) => isPictureLane(lane));
     const bandLanes = visual.filter((lane) => lane.kind === 'band');
     if (bandLanes.length > 1) {
       const bandIds = new Set(bandLanes.map((lane) => lane.id));
@@ -804,6 +1401,159 @@
     return null;
   }
 
+  const sourceEnds = new Map();
+
+  function noteFileDuration(file, seconds) {
+    const n = Number(seconds);
+    if (!file || !(n > 0.05)) return;
+    const prev = sourceEnds.get(file) || 0;
+    if (n > prev + 0.01) sourceEnds.set(file, n);
+  }
+
+  function rememberClipSource(clip) {
+    if (!clip || !clip.file) return;
+    const speed = Number(clip.speed) > 0 ? Number(clip.speed) : 1;
+    const span = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : (Number(clip.duration) || 0) * speed;
+    noteFileDuration(clip.file, (Number(clip.srcIn) || 0) + span);
+  }
+
+  function sameLaneBounds(clip) {
+    let prevEnd = null;
+    let nextStart = null;
+    clips.forEach((item) => {
+      if (!item || item === clip || item.lane !== clip.lane) return;
+      const end = item.start + item.duration;
+      if (end <= clip.start + 0.02 && (prevEnd == null || end > prevEnd)) prevEnd = end;
+      if (item.start >= clip.start + clip.duration - 0.02 && (nextStart == null || item.start < nextStart)) {
+        nextStart = item.start;
+      }
+    });
+    return { prevEnd, nextStart };
+  }
+
+  function trimClipEdge(index, edge, origin, dt) {
+    const clip = clips[index];
+    if (!clip) return;
+    if (isShapeClip(clip)) {
+      const minDur = 0.2;
+      if (edge === 'right') {
+        let dur = origin.duration + dt;
+        const maxByNeighbor = origin.nextStart == null ? 3600 : Math.max(minDur, origin.nextStart - origin.start);
+        dur = Math.min(maxByNeighbor, Math.max(minDur, dur));
+        clip.start = origin.start;
+        clip.duration = round3(dur);
+        clip.srcIn = 0;
+        clip.srcSpan = clip.duration;
+        return;
+      }
+      const end = origin.start + origin.duration;
+      const minByPrev = origin.prevEnd == null ? 0 : origin.prevEnd;
+      let start = origin.start + dt;
+      start = Math.max(minByPrev, Math.min(end - minDur, start));
+      clip.start = round3(Math.max(0, start));
+      clip.duration = round3(Math.max(minDur, end - clip.start));
+      clip.srcIn = 0;
+      clip.srcSpan = clip.duration;
+      return;
+    }
+    const speed = origin.speed;
+    const minDur = 0.12;
+    const fileEnd = sourceEnds.get(clip.file) || origin.srcIn + origin.srcSpan;
+    if (edge === 'right') {
+      let dur = origin.duration + dt;
+      const maxBySource = Math.max(minDur, (fileEnd - origin.srcIn) / speed);
+      const maxByNeighbor = origin.nextStart == null ? maxBySource : Math.max(minDur, origin.nextStart - origin.start);
+      dur = Math.min(maxBySource, maxByNeighbor, Math.max(minDur, dur));
+      clip.start = origin.start;
+      clip.duration = round3(dur);
+      clip.srcIn = origin.srcIn;
+      clip.srcSpan = round3(dur * speed);
+      return;
+    }
+    const end = origin.start + origin.duration;
+    const minByPrev = origin.prevEnd == null ? 0 : origin.prevEnd;
+    const minBySource = origin.start - origin.srcIn / speed;
+    const maxStart = end - minDur;
+    let start = origin.start + dt;
+    start = Math.max(minByPrev, minBySource, Math.min(maxStart, start));
+    const dur = end - start;
+    const srcIn = origin.srcIn + (start - origin.start) * speed;
+    clip.start = round3(Math.max(0, start));
+    clip.duration = round3(Math.max(minDur, dur));
+    clip.srcIn = round3(Math.max(0, srcIn));
+    clip.srcSpan = round3(clip.duration * speed);
+  }
+
+  function appendClipEdge(seg, clipIndex, edge) {
+    const handle = document.createElement('span');
+    handle.className = 'tl-edge tl-edge-' + edge;
+    handle.title = edge === 'left' ? 'بکش تا قبل این تکه هم بیاید' : 'بکش تا بعد این تکه هم بیاید';
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const clip = clips[clipIndex];
+      if (!clip) return;
+      rememberClipSource(clip);
+      const bounds = sameLaneBounds(clip);
+      const origin = {
+        start: clip.start,
+        duration: clip.duration,
+        srcIn: clip.srcIn || 0,
+        srcSpan: clip.srcSpan || clip.duration * (clip.speed || 1),
+        speed: clip.speed || 1,
+        prevEnd: bounds.prevEnd,
+        nextStart: bounds.nextStart,
+      };
+      const originX = event.clientX;
+      let moved = false;
+      draggingClip = true;
+      picked.kind = 'clip';
+      picked.index = clipIndex;
+      selectedLaneId = clip.lane || '';
+      showPicked();
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (err) {}
+      function move(ev) {
+        const dx = ev.clientX - originX;
+        if (Math.abs(dx) < 3) return;
+        moved = true;
+        trimClipEdge(clipIndex, edge, origin, dx / pixelsPerSecond());
+        refreshDuration();
+        placeTimeline();
+      }
+      function up() {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        draggingClip = false;
+        if (!moved) {
+          pickClip(clipIndex);
+          return;
+        }
+        const next = clips[clipIndex];
+        refreshDuration();
+        placeTimeline();
+        const fileEnd = sourceEnds.get(next.file) || origin.srcIn + origin.srcSpan;
+        const reachedFile = edge === 'right' && next.srcIn + next.srcSpan >= fileEnd - 0.04;
+        const reachedNeighbor = edge === 'right' && origin.nextStart != null && next.start + next.duration >= origin.nextStart - 0.04;
+        if (reachedNeighbor) setStatus('به تکه‌ی بعدی همین خط رسید');
+        else if (reachedFile) setStatus('بقیه‌ی این فایل همین‌جا تمام می‌شود');
+        else setStatus('تکه کشیده شد');
+        const showAt = edge === 'right' ? next.start + Math.max(0, next.duration - 0.08) : next.start + 0.04;
+        seekTo(showAt, false);
+        if (Math.abs((next.srcIn || 0) - origin.srcIn) > 0.05) {
+          const lane = laneById(next.lane);
+          if (lane) attachThumb(seg, next, lane);
+        }
+        scheduleSave();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+    seg.appendChild(handle);
+  }
+
   function bindVideoLane(lane) {
     lane.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
@@ -845,6 +1595,9 @@
     if (kind === 'text') {
       return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 4v3h5v13h4V7h5V4H5z"/></svg>';
     }
+    if (kind === 'shape') {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    }
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17 10.5V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3.5l4 4v-11l-4 4z"/></svg>';
   }
 
@@ -855,10 +1608,52 @@
     return '<svg class="tl-speaker tl-speaker-off" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.5 12a3.5 3.5 0 0 0-1.9-3.1v2.2l1.8 1.8c.07-.3.1-.6.1-.9zM4.3 3 3 4.3 7.7 9H4v6h4l5 4v-6.7l4.7 4.7.8-.5L4.3 3zM14 5l-1.9 1.5L14 8.4V5z"/></svg>';
   }
 
+  function eyeIconSvg(open) {
+    if (open) {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5C7 5 2.7 8.1 1 12c1.7 3.9 6 7 11 7s9.3-3.1 11-7c-1.7-3.9-6-7-11-7zm0 11.2A4.2 4.2 0 1 1 12 7.8a4.2 4.2 0 0 1 0 8.4zM12 9.2A2.8 2.8 0 1 0 12 14.8 2.8 2.8 0 0 0 12 9.2z"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3.3 2.2 2.2 3.3 5.1 6.2A13 13 0 0 0 1 12c1.7 3.9 6 7 11 7 1.9 0 3.7-.5 5.3-1.4l3.4 3.4 1.1-1.1L3.3 2.2zM12 17c-3.7 0-6.9-2.3-8.5-5 .6-1.1 1.5-2.2 2.6-3l2.1 2.1A4.2 4.2 0 0 0 12 16.2c.4 0 .8 0 1.1-.1l1.6 1.6c-.8.2-1.7.3-2.7.3zm7.2-2.2 1.5 1.5c1.2-1.1 2.2-2.4 2.8-3.8-1.7-3.9-6-7-11-7-.9 0-1.8.1-2.6.3l1.6 1.6c.3 0 .7-.1 1-.1 3.7 0 6.9 2.3 8.5 5-.4.8-1 1.6-1.8 2.5z"/></svg>';
+  }
+
+  function appendEye(parent, shown, onToggle) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tl-eye' + (shown ? '' : ' is-off');
+    btn.title = shown ? 'پنهان کن' : 'نشان بده';
+    btn.setAttribute('aria-label', shown ? 'پنهان کن' : 'نشان بده');
+    btn.innerHTML = eyeIconSvg(shown);
+    btn.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onToggle();
+    });
+    parent.appendChild(btn);
+  }
+
+  function toggleLaneShown(laneId) {
+    if (laneId === '__words__') wordsHidden = !wordsHidden;
+    else {
+      const lane = laneById(laneId);
+      if (!lane) return;
+      lane.hidden = !lane.hidden;
+    }
+    syncMixMode();
+    renderVideoLane();
+    renderWordLane();
+    renderCaption();
+    if (clips.length) seekTo(time, playing);
+    scheduleSave('lane-hide');
+  }
+
   function countLanesByKind(kind) {
     if (kind === 'video') {
-      return lanes.filter((lane) => lane.kind !== 'audio' && lane.kind !== 'text').length;
+      return lanes.filter((lane) => isPictureLane(lane)).length;
     }
+    if (kind === 'shape') return lanes.filter((lane) => lane.kind === 'shape').length;
     return lanes.filter((lane) => lane.kind === kind).length;
   }
 
@@ -868,10 +1663,14 @@
       tlLabels.replaceChildren();
       if (textLaneVisible) {
         const wordLabel = document.createElement('span');
-        wordLabel.className = 'tl-label-icon';
+        wordLabel.className = 'tl-label-icon' + (wordsHidden ? ' is-hidden' : '');
         wordLabel.dataset.lane = '__words__';
         wordLabel.title = 'لاین متن';
-        wordLabel.innerHTML = laneIconSvg('text');
+        const wordRow = document.createElement('span');
+        wordRow.className = 'tl-label-row';
+        wordRow.innerHTML = laneIconSvg('text');
+        wordLabel.appendChild(wordRow);
+        appendEye(wordLabel, !wordsHidden, () => toggleLaneShown('__words__'));
         bindLaneDrag(wordLabel, '__words__');
         tlLabels.appendChild(wordLabel);
       }
@@ -879,21 +1678,23 @@
         const kind = laneKindOf(key);
         const lane = laneById(key);
         const label = document.createElement('span');
-        label.className = 'tl-label-icon' + (kind === 'audio' ? ' tl-label-audio' : '');
+        const hiddenLane = !!(lane && lane.hidden);
+        label.className = 'tl-label-icon' + (kind === 'audio' ? ' tl-label-audio' : '') + (hiddenLane ? ' is-hidden' : '');
         label.dataset.lane = String(key);
         label.title =
           kind === 'audio'
             ? 'لاین صدا؛ فایل صوتی یا ویدیو را اینجا رها کن'
             : kind === 'text'
               ? 'لاین متن'
-              : 'بکش بالا یا پایین تا جای تصویر عوض شود';
-        const mainIcon = laneIconSvg(kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : 'video');
-        if (kind === 'audio' || kind === 'text') {
-          label.innerHTML = mainIcon;
-        } else {
-          label.innerHTML =
-            '<span class="tl-label-stack">' + mainIcon + speakerIconSvg(laneHasSound(lane)) + '</span>';
-        }
+              : kind === 'shape'
+                ? 'شکل نشانه. روی تصویر بکش تا جابه‌جا شود'
+                : 'بکش بالا یا پایین تا جای تصویر عوض شود';
+        const mainIcon = laneIconSvg(kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : kind === 'shape' ? 'shape' : 'video');
+        const row = document.createElement('span');
+        row.className = 'tl-label-row';
+        row.innerHTML = mainIcon + (kind === 'audio' || kind === 'text' || kind === 'shape' ? '' : speakerIconSvg(laneHasSound(lane)));
+        label.appendChild(row);
+        appendEye(label, !hiddenLane, () => toggleLaneShown(key));
         bindLaneDrag(label, key);
         tlLabels.appendChild(label);
       });
@@ -906,8 +1707,12 @@
         const kind = laneKindOf(key);
         const audio = kind === 'audio';
         lane.className =
-          'tl-lane tl-video' + (audio ? ' tl-audio' : '') + (kind === 'text' ? ' tl-text-lane' : '');
-        if (laneIndex === 0 && kind !== 'audio' && kind !== 'text') lane.id = 'video-lane';
+          'tl-lane tl-video' +
+          (audio ? ' tl-audio' : '') +
+          (kind === 'text' ? ' tl-text-lane' : '') +
+          (kind === 'shape' ? ' tl-shape-lane' : '') +
+          (laneById(key) && laneById(key).hidden ? ' is-hidden' : '');
+        if (laneIndex === 0 && kind !== 'audio' && kind !== 'text' && kind !== 'shape') lane.id = 'video-lane';
         if (audio && !document.getElementById('audio-lane')) lane.id = 'audio-lane';
         lane.setAttribute('data-lane', String(key));
         lane.style.top = (textLaneVisible ? 64 : 8) + laneIndex * 56 + 'px';
@@ -920,10 +1725,18 @@
           tag.className = 'tl-seg-tag';
           tag.textContent = clipTag(clip);
           if (!tag.textContent) tag.hidden = true;
+          if (kind === 'shape') {
+            tag.hidden = false;
+            tag.textContent = shapeTitle((laneById(key) && laneById(key).shape) || clip.shape);
+          }
           seg.appendChild(tag);
+          if (!audio && kind !== 'text') {
+            appendClipEdge(seg, clipIndex, 'left');
+            appendClipEdge(seg, clipIndex, 'right');
+          }
           lane.appendChild(seg);
           if (audio) attachWave(seg, clip);
-          else if (kind !== 'text') attachThumb(seg, clip, laneById(key));
+          else if (kind !== 'text' && kind !== 'shape') attachThumb(seg, clip, laneById(key));
         });
         bindVideoLane(lane);
         if (audio) bindAudioLaneDrop(lane);
@@ -934,7 +1747,7 @@
   }
 
   function findClip(paragraph, start) {
-    const list = clips.filter((clip) => clip.paragraph === Number(paragraph) && !isAudioClip(clip));
+    const list = clips.filter((clip) => clip.paragraph === Number(paragraph) && !isAudioClip(clip) && !isShapeClip(clip));
     if (!list.length) return null;
     for (let i = 0; i < list.length; i++) {
       const clip = list[i];
@@ -1083,7 +1896,7 @@
     const audio = lane === 'audio' || isTakeAudioFile(clip.file);
     const fallbackVol = audio ? 1 : 0;
     const volume = clip.volume == null || clip.volume === '' ? fallbackVol : Number(clip.volume);
-    return {
+    const next = {
       file: clip.file,
       paragraph: Number(clip.paragraph),
       start: Number(clip.start) || 0,
@@ -1095,21 +1908,27 @@
       camera: clip.camera == null || clip.camera === '' ? '0' : clip.camera,
       lane,
     };
+    if (isShapeName(clip.shape)) next.shape = clip.shape;
+    return next;
   }
 
   function clipPayload() {
-    return clips.map((clip) => ({
-      file: clip.file,
-      paragraph: clip.paragraph,
-      duration: clip.duration,
-      srcIn: clip.srcIn || 0,
-      srcSpan: clip.srcSpan || clip.duration * (clip.speed || 1),
-      speed: clip.speed || 1,
-      volume: clip.volume == null ? 1 : clip.volume,
-      camera: clipCamera(clip),
-      start: clip.start || 0,
-      lane: clip.lane || '',
-    }));
+    return clips.map((clip) => {
+      const row = {
+        file: clip.file,
+        paragraph: clip.paragraph,
+        duration: clip.duration,
+        srcIn: clip.srcIn || 0,
+        srcSpan: clip.srcSpan || clip.duration * (clip.speed || 1),
+        speed: clip.speed || 1,
+        volume: clip.volume == null ? 1 : clip.volume,
+        camera: clipCamera(clip),
+        start: clip.start || 0,
+        lane: clip.lane || '',
+      };
+      if (isShapeName(clip.shape)) row.shape = clip.shape;
+      return row;
+    });
   }
 
   function showPicked() {
@@ -1117,7 +1936,17 @@
     const textLaneSelected =
       selectedLaneId === '__words__' ||
       !!(laneById(selectedLaneId) && laneById(selectedLaneId).kind === 'text');
-    if (picked.kind === 'clip' && clips[picked.index]) {
+    if (shapeTools) shapeTools.hidden = true;
+    if (picked.kind === 'clip' && clips[picked.index] && isShapeClip(clips[picked.index])) {
+      const clip = clips[picked.index];
+      const lane = laneById(clip.lane);
+      selectedLaneId = clip.lane || selectedLaneId;
+      editLabel.textContent = shapeTitle(lane && lane.shape ? lane.shape : clip.shape);
+      clipTools.hidden = true;
+      wordTools.hidden = true;
+      if (shapeTools) shapeTools.hidden = false;
+      syncShapeControls(lane);
+    } else if (picked.kind === 'clip' && clips[picked.index]) {
       const clip = clips[picked.index];
       const audio = isAudioClip(clip);
       const sound = clipHasSound(clip);
@@ -1142,6 +1971,10 @@
       clipTools.hidden = true;
       wordTools.hidden = false;
       if (editWordBtn) editWordBtn.hidden = !!(isBlank || isPause);
+      if (breakCaptionBtn) {
+        breakCaptionBtn.hidden = !!(isBlank || isPause);
+        breakCaptionBtn.textContent = word.breakBefore ? 'همین زیرنویس' : 'زیرنویس بعدی';
+      }
       if (deleteWordBtn) deleteWordBtn.hidden = false;
     } else if (textLaneSelected && textLaneVisible) {
       editLabel.textContent = words.length
@@ -1150,6 +1983,7 @@
       clipTools.hidden = true;
       wordTools.hidden = false;
       if (editWordBtn) editWordBtn.hidden = true;
+      if (breakCaptionBtn) breakCaptionBtn.hidden = true;
       if (deleteWordBtn) deleteWordBtn.hidden = true;
     } else {
       editLabel.textContent = textLaneVisible
@@ -1163,11 +1997,13 @@
     if (textLaneVisible && !words.length && picked.kind !== 'clip') {
       wordTools.hidden = false;
       if (editWordBtn) editWordBtn.hidden = true;
+      if (breakCaptionBtn) breakCaptionBtn.hidden = true;
       if (deleteWordBtn) deleteWordBtn.hidden = true;
     }
     placeTimeline();
     markSelectedLane();
     if (!bandUiLock) syncBandOverlays();
+    renderShapes();
   }
 
   function markSelectedLane() {
@@ -1382,16 +2218,20 @@
       return;
     }
     const kind = laneKindOf(laneId);
-    if (kind === 'text') {
+    if (kind === 'text' || kind === 'shape') {
       const lane = laneById(laneId);
-      const name = lane && lane.label ? lane.label : 'این خط متن';
+      const name = lane && lane.label ? lane.label : kind === 'shape' ? 'این شکل' : 'این خط متن';
       if (!window.confirm(name + ' حذف بشه؟')) return;
       lanes = lanes.filter((item) => item.id !== laneId);
+      if (kind === 'shape') clips = clips.filter((item) => item.lane !== laneId);
       if (selectedLaneId === laneId) selectedLaneId = '';
+      picked.kind = '';
+      picked.index = -1;
       renderVideoLane();
+      renderCaption();
       showPicked();
       scheduleSave();
-      setStatus('خط متن حذف شد');
+      setStatus(kind === 'shape' ? 'شکل حذف شد' : 'خط متن حذف شد');
       return;
     }
     const bucket = kind === 'audio' ? 'audio' : 'video';
@@ -1646,6 +2486,7 @@
 
   function syncMixMode() {
     const on = multiView();
+    if (frame) frame.classList.toggle('is-picture-hidden', !pictureShown());
     if (mix) mix.hidden = !on;
     video.classList.toggle('is-backed', on);
     if (on) video.pause();
@@ -1676,7 +2517,11 @@
     if (el.dataset.file !== clip.file) {
       el.dataset.file = clip.file;
       el.src = takeUrl(clip.file);
+      el.onloadedmetadata = function () {
+        noteFileDuration(clip.file, el.duration);
+      };
       el.onloadeddata = function () {
+        noteFileDuration(clip.file, el.duration);
         if (!audio && !(el.videoWidth > 0)) {
           setStatus('این ضبط تصویر ندارد. یک بار دیگر ضبط کن.');
         }
@@ -1710,7 +2555,7 @@
   }
 
   function visualBandBoxes(totalH) {
-    const visual = videoLaneList();
+    const visual = visibleVideoLanes();
     const weights = visual.map(laneWeight);
     const sum = weights.reduce((a, b) => a + b, 0) || 1;
     let y = 0;
@@ -1925,7 +2770,7 @@
   }
 
   function lanePersist(lane) {
-    return {
+    const row = {
       id: lane.id,
       label: lane.label,
       kind: lane.kind,
@@ -1937,11 +2782,24 @@
       panX: lanePanX(lane),
       panY: lanePanY(lane),
       zoom: laneZoom(lane),
+      hidden: !!lane.hidden,
     };
+    if (lane.kind === 'shape') {
+      row.shape = isShapeName(lane.shape) ? lane.shape : 'circle';
+      row.color = lane.color || '#ff3d1f';
+      row.x = Number(lane.x) || 0;
+      row.y = Number(lane.y) || 0;
+      row.w = Number(lane.w) || 0;
+      row.h = Number(lane.h) || 0;
+      row.d = Number(lane.d) || 0;
+      row.stroke = Number(lane.stroke) || 0;
+      row.ellipse = !!lane.ellipse;
+    }
+    return row;
   }
 
   function laneFromDoc(lane) {
-    return {
+    const row = {
       id: String(lane.id),
       label: lane.label || '',
       kind: lane.kind || 'full',
@@ -1953,15 +2811,32 @@
       panX: lanePanX(lane),
       panY: lanePanY(lane),
       zoom: laneZoom(lane),
+      hidden: !!lane.hidden,
     };
+    if (row.kind === 'shape') {
+      row.shape = isShapeName(lane.shape) ? lane.shape : 'circle';
+      row.color = lane.color || '#ff3d1f';
+      row.x = Number(lane.x);
+      row.y = Number(lane.y);
+      row.w = Number(lane.w);
+      row.h = Number(lane.h);
+      row.d = Number(lane.d);
+      row.stroke = Number(lane.stroke);
+      row.ellipse = !!lane.ellipse;
+    }
+    return row;
   }
 
   function syncLaneVideos(force) {
     lanes.forEach((lane) => {
+      if (lane.kind === 'shape' || lane.kind === 'text') return;
       const clip = clipOnLane(lane.id, time);
-      if (!clip) {
+      if (!clip || lane.hidden) {
         const idle = laneVideos.get(lane.id);
-        if (idle) idle.pause();
+        if (idle) {
+          idle.pause();
+          if (lane.hidden) idle.muted = true;
+        }
         return;
       }
       const vid = laneVideo(lane, clip);
@@ -1990,9 +2865,12 @@
     lanes.forEach((lane) => {
       if (lane.kind !== 'audio') return;
       const clip = clipOnLane(lane.id, time);
-      if (!clip) {
+      if (!clip || lane.hidden) {
         const idle = laneVideos.get(lane.id);
-        if (idle) idle.pause();
+        if (idle) {
+          idle.pause();
+          if (lane.hidden) idle.muted = true;
+        }
         return;
       }
       const el = laneVideo(lane, clip);
@@ -2094,6 +2972,7 @@
       video.muted = true;
       video.onloadedmetadata = () => {
         applyLocal();
+        applyPreviewZoom();
         renderCaption();
       };
     } else {
@@ -2135,7 +3014,9 @@
       clips: clipPayload(),
       lanes: lanes.map(lanePersist),
       textLaneVisible: textLaneVisible,
+      wordsHidden: wordsHidden,
       lanesTouched: lanesTouched,
+      videoGuides: videoGuides,
       time,
       picked: { kind: picked.kind, index: picked.index },
       selectedLaneId: selectedLaneId,
@@ -2200,15 +3081,23 @@
         paragraph: Number(word.paragraph),
         pause: pause || blank,
         blank: blank,
+        breakBefore: !blank && !pause && !!word.breakBefore,
+        breakSeal: !blank && !pause && !!word.breakSeal,
         lane: word.lane ? String(word.lane) : 'text-main',
       };
     });
     clips = (data.clips || []).map(decorateClip);
     lanes = Array.isArray(data.lanes) ? data.lanes.map(laneFromDoc) : [];
     textLaneVisible = data.textLaneVisible !== false;
+    wordsHidden = !!data.wordsHidden;
     lanesTouched = !!data.lanesTouched;
+    if (typeof data.videoGuides === 'boolean') {
+      videoGuides = data.videoGuides;
+      if (videoGuidesInput) videoGuidesInput.checked = videoGuides;
+    }
     selectedLaneId = data.selectedLaneId || '';
     repairTimeline();
+    clips.forEach(rememberClipSource);
     ensureLaneClips();
     syncMixMode();
     duration = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
@@ -2265,7 +3154,7 @@
     saveTimer = setTimeout(flushSave, 350);
   }
 
-  async function flushSave() {
+  async function flushSave(doneText) {
     if (!ready) return;
     if (saving) {
       saveQueued = true;
@@ -2278,7 +3167,9 @@
       clips: clipPayload(),
       lanes: lanes.map(lanePersist),
       textLaneVisible: textLaneVisible,
+      wordsHidden: wordsHidden,
       lanesTouched: lanesTouched,
+      videoGuides: videoGuides,
     };
     try {
       const res = await fetch('/api/captions?slug=' + encodeURIComponent(slug), {
@@ -2290,7 +3181,7 @@
       if (!res.ok) setStatus(data.error || 'ذخیره نشد');
       else {
         syncFromServer(data);
-        if (!draggingWord && !draggingCaption) setStatus('ذخیره شد');
+        if (!draggingWord && !draggingCaption) setStatus(doneText || 'ذخیره شد');
       }
     } catch (err) {
       setStatus('ذخیره نشد');
@@ -2316,6 +3207,8 @@
         paragraph: Number(word.paragraph),
         pause: pause || blank,
         blank: blank,
+        breakBefore: !blank && !pause && !!word.breakBefore,
+        breakSeal: !blank && !pause && !!word.breakSeal,
         lane: word.lane ? String(word.lane) : 'text-main',
       };
     });
@@ -2323,13 +3216,22 @@
     docCameras = Array.isArray(doc.cameras) ? doc.cameras.slice() : [];
     lanes = Array.isArray(doc.lanes) ? doc.lanes.map(laneFromDoc) : [];
     textLaneVisible = doc.textLaneVisible !== false;
+    wordsHidden = !!doc.wordsHidden;
     lanesTouched = !!doc.lanesTouched;
+    videoGuides = guidesFromDoc(doc);
+    cameraLayout = doc.cameraLayout === 'cut' || doc.cameraLayout === 'split' || doc.cameraLayout === 'look' ? doc.cameraLayout : '';
+    cutSeconds = Number(doc.cutSeconds) > 0 ? Number(doc.cutSeconds) : 1.5;
+    cutSliced = !!doc.cutSliced;
+    lookCuts = doc.lookCuts && typeof doc.lookCuts === 'object' ? doc.lookCuts : {};
+    lookSliced = !!doc.lookSliced;
+    if (videoGuidesInput) videoGuidesInput.checked = videoGuides;
     repairTimeline();
+    clips.forEach(rememberClipSource);
     ensureLaneClips();
     syncMixMode();
     duration = clips.reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0);
-    titleEl.textContent = doc.title || 'زیرنویس';
-    document.title = (doc.title || 'زیرنویس') + ' | Reel Studio';
+    titleEl.textContent = doc.title || 'ویرایشگر';
+    document.title = (doc.title || 'ویرایشگر') + ' | Reel Studio';
     if (doc.hasRender) showExport();
     fillForm();
     renderWordLane();
@@ -2377,7 +3279,8 @@
   function rescaleToMeasured(measured) {
     let changed = false;
     const previous = clips.map((clip) => decorateClip(clip));
-    const videoPrev = previous.filter((clip) => !isAudioClip(clip));
+    const shapePrev = previous.filter((clip) => isShapeClip(clip));
+    const videoPrev = previous.filter((clip) => !isAudioClip(clip) && !isShapeClip(clip));
     const audioPrev = previous.filter((clip) => isAudioClip(clip));
     const nextVideo = [];
     let cursor = 0;
@@ -2429,14 +3332,14 @@
         srcSpan,
       });
     });
-    clips = nextVideo.concat(nextAudio);
+    clips = nextVideo.concat(nextAudio).concat(shapePrev);
     duration = cursor;
     recomputeEnds();
     return true;
   }
 
   function syncFromServer(data) {
-    if (!data || draggingWord || draggingCaption || editingWord) return;
+    if (!data || draggingWord || draggingClip || draggingCaption || editingWord) return;
     if (data.style) {
       style = Object.assign(defaultStyle(), data.style);
       fillForm();
@@ -2453,10 +3356,13 @@
           paragraph: Number(word.paragraph),
           pause: pause || blank,
           blank: blank,
+          breakBefore: !blank && !pause && !!word.breakBefore,
+          breakSeal: !blank && !pause && !!word.breakSeal,
         };
       });
     }
     if (typeof data.textLaneVisible === 'boolean') textLaneVisible = data.textLaneVisible;
+    if (typeof data.wordsHidden === 'boolean') wordsHidden = data.wordsHidden;
     if (Array.isArray(data.clips)) {
       const next = data.clips.map(decorateClip);
       const same =
@@ -2620,7 +3526,9 @@
       maxY = Math.max(maxY, box.y + box.h);
     });
     const shadow = shadowPixels();
-    const pad = Math.ceil(shadow.blur + Math.abs(shadow.y) + 4);
+    const bgPadX = style.background ? Math.ceil(size * 0.32) : 0;
+    const bgPadY = style.background ? Math.ceil(size * 0.16) : 0;
+    const pad = Math.ceil(shadow.blur + Math.abs(shadow.y) + 4) + Math.max(bgPadX, bgPadY);
     const originX = pad - minX;
     const originY = pad - minY;
     const canvas = document.createElement('canvas');
@@ -2637,6 +3545,21 @@
     const radius = Math.max(0, size * 0.22);
     const fill = rgba(style.color, style.textOpacity == null ? 100 : style.textOpacity);
     const hi = rgba(style.highlightColor, style.highlightOpacity);
+    if (style.background) {
+      ctx.save();
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = rgba(style.backgroundColor || '#000000', style.backgroundOpacity == null ? 60 : style.backgroundOpacity);
+      const bx = originX - bgPadX;
+      const by = originY - bgPadY;
+      const bw = host.width + bgPadX * 2;
+      const bh = host.height + bgPadY * 2;
+      const boxRadius = Math.min(size * 0.28, bw / 2, bh / 2);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, boxRadius);
+      else ctx.rect(bx, by, bw, bh);
+      ctx.fill();
+      ctx.restore();
+    }
     boxes.forEach((box) => {
       if (!box.hot) return;
       ctx.save();
@@ -2650,7 +3573,7 @@
       ctx.restore();
     });
     boxes.forEach((box) => {
-      ctx.shadowColor = box.hot ? 'transparent' : 'rgba(0, 0, 0, 0.72)';
+      ctx.shadowColor = style.background || box.hot ? 'transparent' : 'rgba(0, 0, 0, 0.72)';
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = box.hot ? 0 : shadow.y;
       ctx.shadowBlur = box.hot ? 0 : shadow.blur;
@@ -2679,7 +3602,42 @@
     });
   }
 
+  async function buildShapeOverlays(width, height) {
+    const overlays = [];
+    const list = lanes.filter((lane) => lane && lane.kind === 'shape' && !lane.hidden);
+    for (let i = 0; i < list.length; i++) {
+      const lane = list[i];
+      const ranges = clips
+        .filter((clip) => clip && clip.lane === lane.id && isShapeClip(clip))
+        .map((clip) => ({ start: round3(clip.start), end: round3(clip.start + clip.duration) }))
+        .filter((range) => range.end > range.start + 0.02);
+      if (!ranges.length) continue;
+      const box = shapeBox(lane, width, height);
+      const pad = 4;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(2, Math.ceil(box.w + pad));
+      canvas.height = Math.max(2, Math.ceil(box.h + pad));
+      drawShape(canvas.getContext('2d'), lane, {
+        x: pad / 2,
+        y: pad / 2,
+        w: box.w,
+        h: box.h,
+        stroke: box.stroke,
+      });
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) continue;
+      overlays.push({
+        x: Math.round(box.x - pad / 2),
+        y: Math.round(box.y - pad / 2),
+        png: await blobToBase64(blob),
+        ranges: ranges,
+      });
+    }
+    return overlays;
+  }
+
   async function buildCaptionSheet(width, height) {
+    if (wordsHidden) return [];
     const groups = new Map();
     captionFrames().forEach((frame) => {
       const key = JSON.stringify(frame.parts);
@@ -2880,7 +3838,10 @@
         finish();
         return;
       }
-      const at = Math.min(0.35, Math.max(0, (probe.duration || 0.2) * 0.2));
+      const srcIn = Math.max(0, Number(clip.srcIn) || 0);
+      const span = Number(clip.srcSpan) > 0 ? Number(clip.srcSpan) : Number(clip.duration) || 0.2;
+      const fileEnd = Math.max(0.05, (probe.duration || srcIn + span) - 0.05);
+      const at = Math.min(fileEnd, srcIn + Math.min(0.35, Math.max(0.05, span * 0.25)));
       if (Math.abs((probe.currentTime || 0) - at) < 0.05) draw();
       else {
         const onSeek = () => {
@@ -3026,6 +3987,36 @@ async function measureDurations() {
     renderCaption();
     scheduleSave();
   });
+  if (backgroundInput) {
+    backgroundInput.addEventListener('change', () => {
+      readForm();
+      renderCaption();
+      scheduleSave();
+    });
+  }
+  if (backgroundColor) {
+    backgroundColor.addEventListener('input', () => {
+      readForm();
+      renderCaption();
+      scheduleSave('style');
+    });
+  }
+  if (backgroundOpacityInput) {
+    backgroundOpacityInput.addEventListener('input', () => {
+      readForm();
+      renderCaption();
+      scheduleSave('style');
+    });
+  }
+  if (videoGuidesInput) {
+    videoGuidesInput.addEventListener('change', () => {
+      videoGuides = videoGuidesInput.checked;
+      syncMixMode();
+      if (clips.length) seekTo(time, playing);
+      else syncBandOverlays();
+      scheduleSave('video-guides');
+    });
+  }
   function fileExt(file) {
     const name = String((file && file.name) || '').toLowerCase();
     const match = /\.([a-z0-9]+)$/.exec(name);
@@ -3256,7 +4247,71 @@ async function measureDurations() {
     if (addMenu) addMenu.hidden = true;
   }
 
+  function shapeDefaults(shape) {
+    if (shape === 'rect') return { x: 68, y: 34, w: 28, h: 16, d: 22, stroke: 8, color: '#3ba0ff' };
+    if (shape === 'arrow') return { x: 50, y: 72, w: 36, h: 14, d: 22, stroke: 10, color: '#f5c542' };
+    return { x: 32, y: 36, w: 22, h: 22, d: 22, stroke: 8, color: '#ff3d1f' };
+  }
+
+  function addShapeLane(shape) {
+    const name = isShapeName(shape) ? shape : 'circle';
+    if (countLanesByKind('shape') >= LANE_LIMIT) {
+      setStatus('بیشتر از ' + faNum(LANE_LIMIT) + ' شکل نمی‌شه');
+      return;
+    }
+    const preset = shapeDefaults(name);
+    const id = 'shape-' + Date.now().toString(36);
+    lanes.push({
+      id: id,
+      label: shapeTitle(name),
+      kind: 'shape',
+      band: 0,
+      bands: 1,
+      file: '',
+      weight: 1,
+      panX: 0.5,
+      panY: 0.5,
+      zoom: 1,
+      hidden: false,
+      shape: name,
+      color: preset.color,
+      x: preset.x,
+      y: preset.y,
+      w: preset.w,
+      h: preset.h,
+      d: preset.d,
+      stroke: preset.stroke,
+    });
+    const span = Math.max(0.4, duration || 3);
+    const sample = clips.find((clip) => clip && !isShapeClip(clip) && !isAudioClip(clip));
+    clips.push({
+      file: '',
+      paragraph: sample ? sample.paragraph : 0,
+      start: 0,
+      duration: span,
+      srcIn: 0,
+      srcSpan: span,
+      speed: 1,
+      volume: 0,
+      camera: 'shape',
+      lane: id,
+      shape: name,
+    });
+    selectedLaneId = id;
+    picked.kind = 'clip';
+    picked.index = clips.length - 1;
+    renderVideoLane();
+    renderCaption();
+    showPicked();
+    scheduleSave();
+    setStatus(shapeTitle(name) + ' اضافه شد. روی تصویر بکش و از گزینه‌ها اندازه و رنگ را عوض کن.');
+  }
+
   function addEmptyLane(kind) {
+    if (String(kind || '').indexOf('shape-') === 0) {
+      addShapeLane(String(kind).slice(6));
+      return;
+    }
     ensureLaneClips();
     const bucket = kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : 'video';
     if (countLanesByKind(bucket) >= LANE_LIMIT) {
@@ -3314,6 +4369,8 @@ async function measureDurations() {
   }
   if (addMenu) {
     addMenu.addEventListener('click', (event) => {
+      const menuBtn = event.target && event.target.closest ? event.target.closest('[data-shape-menu]') : null;
+      if (menuBtn) return;
       const btn = event.target && event.target.closest ? event.target.closest('[data-lane-kind]') : null;
       if (!btn) return;
       hideAddMenu();
@@ -3325,6 +4382,42 @@ async function measureDurations() {
     if (event.target === addLineBtn || (addLineBtn && addLineBtn.contains(event.target))) return;
     if (addMenu.contains(event.target)) return;
     hideAddMenu();
+  });
+  function bindShapeInput(input, read, write) {
+    if (!input) return;
+    input.addEventListener('input', () => {
+      const lane = selectedShapeLane();
+      if (!lane) return;
+      write(lane, Number(input.value));
+      syncShapeControls(lane);
+      renderShapes();
+      scheduleSave('shape');
+    });
+  }
+  bindShapeInput(shapeColorInput, null, (lane) => {
+    lane.color = shapeColorInput.value || '#ff3d1f';
+  });
+  bindShapeInput(shapeDiameterInput, null, (lane, value) => {
+    lane.d = value;
+    lane.w = value;
+    lane.h = value;
+    lane.ellipse = false;
+  });
+  bindShapeInput(shapeWidthInput, null, (lane, value) => {
+    lane.w = value;
+    if (lane.shape === 'circle') lane.ellipse = Math.abs(value - Number(lane.h)) > 0.4;
+  });
+  bindShapeInput(shapeHeightInput, null, (lane, value) => {
+    lane.h = value;
+    if (lane.shape === 'circle') lane.ellipse = Math.abs(Number(lane.w) - value) > 0.4;
+  });
+  document.querySelectorAll('[data-quick-shape]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      addShapeLane(btn.getAttribute('data-quick-shape') || 'circle');
+    });
+  });
+  bindShapeInput(shapeStrokeInput, null, (lane, value) => {
+    lane.stroke = value;
   });
   if (attachInput) {
     attachInput.addEventListener('change', () => {
@@ -3350,6 +4443,19 @@ async function measureDurations() {
       setStatus('پوشه باز نشد');
     });
   });
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      clearTimeout(saveTimer);
+      await flushSave('تغییرات ذخیره شد');
+      while (saving || saveQueued) await new Promise((resolve) => setTimeout(resolve, 40));
+      if (statusEl.textContent !== 'ذخیره نشد') setStatus('تغییرات ذخیره شد');
+      saveBtn.disabled = false;
+    });
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && ready) flushSave();
+  });
   renderBtn.addEventListener('click', async () => {
     renderBtn.disabled = true;
     setStatus('داره زیرنویس رو روی ویدیو می‌نویسه');
@@ -3361,15 +4467,17 @@ async function measureDurations() {
         setStatus('اندازه‌ی ویدیو هنوز معلوم نیست');
         return;
       }
-      const overlays = await buildCaptionSheet(size.width, size.height);
-      if (!overlays.length) {
+      const captionOverlays = wordsHidden ? [] : await buildCaptionSheet(size.width, size.height);
+      const shapeOverlays = await buildShapeOverlays(size.width, size.height);
+      const overlays = captionOverlays.concat(shapeOverlays);
+      if (!wordsHidden && !overlays.length) {
         setStatus('زیرنویسی برای نوشتن نیست');
         return;
       }
       const res = await fetch('/api/captions/render?slug=' + encodeURIComponent(slug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ overlays: overlays }),
+        body: JSON.stringify({ overlays: overlays, skipCaptions: overlays.length === 0 }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -3386,6 +4494,9 @@ async function measureDurations() {
     }
   });
 
+  video.addEventListener('loadedmetadata', () => {
+    if (video.dataset.file) noteFileDuration(video.dataset.file, video.duration);
+  });
   video.addEventListener('timeupdate', () => {
     if (multiView()) return;
     if (!playing || !clockLive) return;
@@ -3394,10 +4505,24 @@ async function measureDurations() {
     const speed = current.speed || 1;
     const local = (video.currentTime - (current.srcIn || 0)) / speed;
     if (local >= current.duration - 0.04) {
+      const at = current.start + current.duration + 0.02;
+      const cover = clips.find(
+        (clip) =>
+          clip !== current &&
+          !isAudioClip(clip) &&
+          at >= clip.start - 0.001 &&
+          at < clip.start + clip.duration - 0.001
+      );
+      if (cover) {
+        seekTo(at, true);
+        return;
+      }
       const videoClips = clips.filter((clip) => !isAudioClip(clip));
-      const pos = videoClips.indexOf(current);
-      if (pos >= 0 && pos < videoClips.length - 1) {
-        seekTo(videoClips[pos + 1].start + 0.02, true);
+      const next = videoClips
+        .filter((clip) => clip !== current && clip.start >= current.start + current.duration - 0.08)
+        .sort((a, b) => a.start - b.start)[0];
+      if (next) {
+        seekTo(next.start + 0.02, true);
         return;
       }
       playing = false;
@@ -3506,6 +4631,44 @@ async function measureDurations() {
       else addBlank(Math.max(0, words.length - 1));
     });
   }
+  function breakCaptionHere() {
+    if (picked.kind !== 'word' || !words[picked.index]) return;
+    const word = words[picked.index];
+    if (word.pause || word.blank) return;
+    const spoken = spokenWordsOnly(words);
+    const group = groupLines(spoken).find((items) => items.indexOf(word) !== -1);
+    if (!group) return;
+    if (word.breakBefore) {
+      word.breakBefore = false;
+      const after = groupLines(spokenWordsOnly(words));
+      const home = after.find((items) => items.indexOf(word) !== -1);
+      const seam = home ? after[after.indexOf(home) + 1] : null;
+      const edge = seam && seam[0];
+      if (edge && edge.breakSeal) {
+        edge.breakBefore = false;
+        edge.breakSeal = false;
+      }
+      setStatus('برگشت به همین زیرنویس');
+    } else if (group[0] === word) {
+      setStatus('این کلمه اول زیرنویسه');
+      return;
+    } else {
+      const next = groupLines(spoken).find((items) => items[0] && items[0].start > group[group.length - 1].start);
+      const edge = next && next[0];
+      word.breakBefore = true;
+      if (edge && edge !== word && !edge.breakBefore) {
+        edge.breakBefore = true;
+        edge.breakSeal = true;
+      }
+      setStatus('از این کلمه زیرنویس بعدی می‌شه');
+    }
+    renderWordLane();
+    renderCaption();
+    showPicked();
+    scheduleSave();
+  }
+
+  if (breakCaptionBtn) breakCaptionBtn.addEventListener('click', breakCaptionHere);
   deleteWordBtn.addEventListener('click', () => {
     if (picked.kind === 'word') deleteWord(picked.index);
   });

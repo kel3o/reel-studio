@@ -12,8 +12,16 @@ const {
   centersFromRight,
   buildAss,
   concatFilter,
+  groupLines,
+  sanitizeWords,
   toPersianDigits,
   uniqueRenderName,
+  applyCutCameraFiles,
+  sanitizeLanes,
+  expandCutClips,
+  sanitizeLookCuts,
+  sliceLookClip,
+  expandLookClips,
 } = require('../lib/captions');
 
 const spoken = spokenWords('سلام ⏸ دنیا  بعدی برای [2]تماس **[6]نمی‌کند.** 3 تا');
@@ -170,6 +178,22 @@ assert.strictEqual(layered[1].start, 0);
 assert.strictEqual(layered[1].lane, 'cam-1');
 assert.strictEqual(layered[1].duration, 2);
 
+const withShape = normalizeSavedClips(baseClips, [
+  { file: '01-1.webm', paragraph: 0, start: 0, duration: 4, srcIn: 0, srcSpan: 4, speed: 1, volume: 1, lane: 'main' },
+  { file: '', paragraph: 0, start: 0.5, duration: 2, shape: 'arrow', lane: 'shape-a' },
+]);
+assert.strictEqual(withShape.length, 2);
+assert.strictEqual(withShape[1].shape, 'arrow');
+assert.strictEqual(withShape[1].lane, 'shape-a');
+assert.strictEqual(withShape[1].file, '');
+const shapeLanes = sanitizeLanes([
+  { id: 'shape-a', label: 'فلش', kind: 'shape', shape: 'arrow', color: '#F5C542', x: 140, y: 40, w: 30, h: 12, d: 22, stroke: 10 },
+]);
+assert.strictEqual(shapeLanes[0].kind, 'shape');
+assert.strictEqual(shapeLanes[0].shape, 'arrow');
+assert.strictEqual(shapeLanes[0].color, '#f5c542');
+assert.strictEqual(shapeLanes[0].x, 100);
+
 const stacked = require('../lib/captions').stackFilter(
   [
     { start: 0, duration: 4, srcIn: 0, srcSpan: 4, speed: 1, volume: 1, audio: true, useAudio: true, laneIndex: 0, cropBands: 2, cropBand: 0 },
@@ -207,5 +231,121 @@ assert.strictEqual(kept.length, 3);
 assert.ok(kept[0].end <= 1.501);
 assert.ok(kept[1].start >= 1.5);
 assert.ok(kept[1].end <= 4.001);
+
+const broken = groupLines([
+  { text: 'زدی', start: 0, end: 1, paragraph: 0 },
+  { text: 'من', start: 1, end: 2, paragraph: 0 },
+  { text: 'اینم', start: 2, end: 3, paragraph: 0, breakBefore: true },
+  { text: 'بقیه', start: 3, end: 4, paragraph: 0 },
+]);
+assert.strictEqual(broken.length, 2);
+assert.strictEqual(broken[0].map((word) => word.text).join(' '), 'زدی من');
+assert.strictEqual(broken[1].map((word) => word.text).join(' '), 'اینم بقیه');
+
+const sealed = groupLines([
+  { text: 'زدی', start: 0, end: 1, paragraph: 0 },
+  { text: 'من', start: 1, end: 2, paragraph: 0, breakBefore: true },
+  { text: 'نزدم', start: 2, end: 3, paragraph: 0 },
+  { text: 'اینم', start: 3, end: 4, paragraph: 0, breakBefore: true, breakSeal: true },
+  { text: 'بقیه', start: 4, end: 5, paragraph: 0 },
+]);
+assert.strictEqual(sealed.map((group) => group.map((word) => word.text).join(' ')).join('|'), 'زدی|من نزدم|اینم بقیه');
+
+const marked = sanitizeWords(
+  [
+    { text: 'یک', start: 0, paragraph: 0, breakBefore: true },
+    { text: 'دو', start: 1, paragraph: 0 },
+  ],
+  [{ file: '01-1.webm', paragraph: 0, start: 0, duration: 4, lane: 'main' }]
+);
+assert.strictEqual(marked[0].breakBefore, true);
+assert.ok(!marked[1].breakBefore);
+const sealedWords = sanitizeWords(
+  [
+    { text: 'من', start: 0, paragraph: 0, breakBefore: true },
+    { text: 'اینم', start: 1, paragraph: 0, breakBefore: true, breakSeal: true },
+  ],
+  [{ file: '01-1.webm', paragraph: 0, start: 0, duration: 4, lane: 'main' }]
+);
+assert.strictEqual(sealedWords[1].breakSeal, true);
+
+const bg = clampStyle({ background: true, backgroundColor: '#112233', backgroundOpacity: 40 });
+assert.strictEqual(bg.background, true);
+assert.strictEqual(bg.backgroundColor, '#112233');
+assert.strictEqual(bg.backgroundOpacity, 40);
+assert.strictEqual(clampStyle({}).background, false);
+const bgAss = buildAss(
+  { style: bg, words: [{ text: 'سلام', start: 0, end: 1, paragraph: 0 }] },
+  720,
+  1280,
+  'Vazirmatn'
+);
+assert.ok(bgAss.indexOf('Style: Back,') !== -1);
+assert.ok(bgAss.indexOf('&H99332211&') !== -1);
+
+const duplicated = [
+  { file: '01-9.webm', paragraph: 0, start: 0, duration: 7.736, srcIn: 0, srcSpan: 7.736, speed: 1, volume: 0, lane: 'cam-0' },
+  { file: '01-9.webm', paragraph: 0, start: 0, duration: 7.736, srcIn: 0, srcSpan: 7.736, speed: 1, volume: 0, lane: 'cam-1' },
+  { file: '01-9-a.webm', paragraph: 0, start: 0, duration: 7.736, lane: 'audio', volume: 1 },
+];
+const sliced = expandCutClips(duplicated, ['cam-0', 'cam-1'], 1.5, false);
+const slicedVideo = sliced.filter((clip) => clip.lane !== 'audio');
+assert.strictEqual(slicedVideo.length, 6);
+assert.strictEqual(slicedVideo.map((clip) => clip.lane).join(','), 'cam-0,cam-1,cam-0,cam-1,cam-0,cam-1');
+assert.strictEqual(slicedVideo[0].duration, 1.5);
+assert.strictEqual(slicedVideo[5].start, 7.5);
+assert.ok(slicedVideo[5].duration < 0.3);
+assert.strictEqual(sliced.filter((clip) => clip.lane === 'audio').length, 1);
+const again = expandCutClips(sliced, ['cam-0', 'cam-1'], 1.5, true);
+assert.strictEqual(again.length, sliced.length);
+assert.ok(slicedVideo.every((clip, index) => clip.lane !== slicedVideo[(index + 1) % slicedVideo.length].lane || slicedVideo.length < 2));
+
+const ownFiles = ['01-1-c0.webm', '01-1-c1.webm'];
+const own = expandCutClips(
+  [{ file: '01-1.webm', paragraph: 0, start: 0, duration: 3, srcIn: 0, srcSpan: 3, speed: 1, volume: 0, lane: 'cam-0' }],
+  ['cam-0', 'cam-1'],
+  1.5,
+  false,
+  () => ownFiles
+);
+assert.strictEqual(own.map((clip) => clip.file).join(','), '01-1-c0.webm,01-1-c1.webm');
+assert.strictEqual(own.map((clip) => clip.lane).join(','), 'cam-0,cam-1');
+assert.strictEqual(own[0].srcIn, 0);
+assert.strictEqual(own[1].srcIn, 1.5);
+assert.strictEqual(own[1].start, 1.5);
+
+const retargeted = applyCutCameraFiles(slicedVideo, ['cam-0', 'cam-1'], () => ['01-9-c0.webm', '01-9-c1.webm']);
+assert.strictEqual(retargeted[0].file, '01-9-c0.webm');
+assert.strictEqual(retargeted[1].file, '01-9-c1.webm');
+assert.strictEqual(retargeted[2].file, '01-9-c0.webm');
+assert.strictEqual(retargeted[0].srcIn, slicedVideo[0].srcIn);
+assert.strictEqual(retargeted[1].srcIn, slicedVideo[1].srcIn);
+const blocked = applyCutCameraFiles(slicedVideo, ['cam-0', 'cam-1'], () => ['01-2-c0.webm', '01-2-c1.webm']);
+assert.strictEqual(blocked[0].file, '01-9.webm');
+const keptOwn = expandCutClips(retargeted, ['cam-0', 'cam-1'], 1.5, true, () => ['01-9-c0.webm', '01-9-c1.webm']);
+assert.strictEqual(keptOwn.length, retargeted.length);
+assert.strictEqual(keptOwn[0].file, '01-9-c0.webm');
+
+const lookMaster = [{ file: '01-3.webm', paragraph: 0, start: 0, duration: 8, srcIn: 0, srcSpan: 8, speed: 1, volume: 0, lane: 'cam-0' }];
+const lookCuts = [{ t: 0, camera: 0 }, { t: 2.5, camera: 1 }, { t: 5, camera: 0 }];
+const looked = expandLookClips(lookMaster, ['cam-0', 'cam-1'], () => lookCuts, false, () => ['01-3-c0.webm', '01-3-c1.webm']);
+assert.deepStrictEqual(looked.map((clip) => clip.lane), ['cam-0', 'cam-1', 'cam-0']);
+assert.deepStrictEqual(looked.map((clip) => clip.file), ['01-3-c0.webm', '01-3-c1.webm', '01-3-c0.webm']);
+assert.strictEqual(looked[1].start, 2.5);
+assert.strictEqual(looked[1].srcIn, 2.5);
+assert.strictEqual(looked[2].duration, 3);
+const lookedAgain = expandLookClips(looked, ['cam-0', 'cam-1'], () => lookCuts, true, () => ['01-3-c0.webm', '01-3-c1.webm']);
+assert.strictEqual(lookedAgain.length, looked.length);
+assert.strictEqual(lookedAgain[0].file, '01-3-c0.webm');
+const held = sliceLookClip(lookMaster[0], ['cam-0', 'cam-1'], [], ['01-3-c0.webm', '01-3-c1.webm']);
+assert.strictEqual(held.length, 1);
+assert.strictEqual(held[0].lane, 'cam-0');
+assert.strictEqual(held[0].duration, 8);
+const cleaned = sanitizeLookCuts([{ t: 1, camera: 1 }, { t: 1.1, camera: 0 }, { t: 4, camera: 2 }]);
+assert.strictEqual(cleaned.length, 2);
+assert.strictEqual(cleaned[0].t, 0);
+assert.strictEqual(cleaned[0].camera, 0);
+assert.strictEqual(cleaned[1].t, 4);
+assert.strictEqual(cleaned[1].camera, 2);
 
 console.log('captions ok');

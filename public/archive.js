@@ -91,7 +91,7 @@
       const edit = document.createElement('a');
       edit.className = 'btn btn-accent';
       edit.href = '/edit.html?slug=' + encodeURIComponent(item.slug);
-      edit.textContent = 'ویرایش زیرنویس';
+      edit.textContent = 'ویرایشگر';
       actions.appendChild(edit);
       const shelf = document.createElement('button');
       shelf.type = 'button';

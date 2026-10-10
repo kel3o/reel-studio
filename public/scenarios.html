@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>سناریوهای ریل استودیو</title>
-<link rel="stylesheet" href="/style.css?v=18" />
+<title>بایگانی سناریوها</title>
+<link rel="stylesheet" href="/style.css?v=33" />
 <script>
   try {
     if (localStorage.getItem('reel.theme') === 'light') {
@@ -34,11 +34,11 @@
 </header>
 <div class="sub-page">
   <a href="/" class="back-btn">بازگشت</a>
-  <h1>سناریوها</h1>
-  <div class="scenarios-toolbar">
+  <div class="page-head">
+    <h1>بایگانی سناریوها</h1>
     <a href="/script.html" class="btn btn-accent">افزودن سناریو جدید</a>
   </div>
-  <p class="page-lead">سناریوهای ذخیره‌شده اینجاست. «ضبط» صفحهٔ ضبط همون سناریو رو باز می‌کنه. «ویرایش» همون صفحهٔ نوشتن رو باز می‌کنه. کارت تموم شد؟ «اتمام و آرشیو» رو بزن تا بره تب آرشیو.</p>
+  <p class="page-lead">با زدن گزینه‌ی ضبط وارد صفحه‌ی تله پرامپتر می‌شوید.<br>با زدن گزینه‌ی ویرایش، امکان تغییر در متن و تیتر سناریو را خواهید داشت.<br>دکمه‌ی «اتمام و آرشیو»، پروژه را از این لیست، به لیست «آرشیو» انتقال میده تا صفحه شلوغ نشود.<br>گزینه‌ی حذف جهت پاک کردن پروژه است. توجه فرمایید که بعد از حذف، امکان بازگردانی نیست.</p>
   <div class="settings-tabs list-tabs" role="tablist">
     <button type="button" class="on" data-list-tab="list" role="tab">لیست</button>
     <button type="button" data-list-tab="archive" role="tab">آرشیو</button>
@@ -47,7 +47,7 @@
   <div id="scenarios-list" class="archive-list"></div>
 </div>
 <script src="/shell.js"></script>
-<script src="/rec-shortcut.js?v=1"></script>
-<script src="/scenarios.js?v=3"></script>
+<script src="/rec-shortcut.js?v=2"></script>
+<script src="/scenarios.js?v=4"></script>
 </body>
 </html>

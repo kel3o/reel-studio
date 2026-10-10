@@ -140,6 +140,7 @@
     '<p class="maker-line">توسعه‌دهنده: <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>' +
     '<p class="maker-line">طراحی شده با <span class="maker-gold">هوش مصنوعی</span></p>' +
     '<p class="maker-line">با ابزار <span class="maker-gold">Cursor</span> و مدل زبانی <span class="maker-gold">Grok 4.7</span></p>' +
+    '<p class="maker-line">نسخه ۳.۰.۰</p>' +
     '</div>';
   document.body.appendChild(modal);
   const card = modal.querySelector('.maker-card');

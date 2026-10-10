@@ -70,7 +70,7 @@
       const actions = document.createElement('div');
       actions.className = 'archive-actions';
       const record = document.createElement('a');
-      record.className = 'btn btn-accent';
+      record.className = 'btn btn-record';
       record.href = '/?script=' + encodeURIComponent(item.path);
       record.textContent = 'ضبط';
       actions.appendChild(record);
