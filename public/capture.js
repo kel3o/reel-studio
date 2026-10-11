@@ -191,6 +191,7 @@
         fontSize: fontSize,
         lineHeight: lineHeight,
         scrollPos: scrollPos,
+        readAt: readingCue(),
         phase: state.phase,
         yellowWords: yellowWords,
         yellowIndex: yellowIndex,
@@ -254,14 +255,99 @@
         break;
       }
     }
-    if (next !== yellowIndex) {
-      yellowIndex = next;
-      const word = markYellowWord(yellowIndex);
-      followYellowWord(word);
-      pushTeleprompter({ yellowIndex: yellowIndex, yellowWords: true });
-    } else {
-      markYellowWord(yellowIndex);
+    if (next === yellowIndex) return;
+    yellowIndex = next;
+    const word = markYellowWord(yellowIndex);
+    followYellowWord(word);
+    notifyReadHead(true);
+  }
+
+  // Word centers in the stage's content, so a hidden panel can still name
+  // the word at the reading line from scrollPos. Pixel offset is not shared
+  // with the phone: its column is narrower, so the same pixels walk fewer words.
+  function measureWordMids() {
+    const current = textEl.querySelector('.tp-paragraph.tp-current');
+    if (!current || stage.clientHeight < 2) return;
+    const words = current.querySelectorAll('.tp-w');
+    const stageTop = stage.getBoundingClientRect().top;
+    const origin = scrollPos;
+    const mids = new Array(words.length);
+    for (let i = 0; i < words.length; i++) {
+      const rect = words[i].getBoundingClientRect();
+      mids[i] = (rect.top + rect.bottom) / 2 - stageTop + origin;
     }
+    wordMids = mids;
+    wordStageH = stage.clientHeight;
+  }
+
+  function lineSpanAt(mids, index) {
+    const y = mids[index];
+    for (let i = index + 1; i < mids.length; i++) {
+      if (mids[i] - y > 0.5) return mids[i] - y;
+    }
+    for (let i = index - 1; i >= 0; i--) {
+      if (y - mids[i] > 0.5) return y - mids[i];
+    }
+    return Math.max(32, wordStageH * 0.08);
+  }
+
+  function cueFromMids(mids, eye) {
+    if (!mids.length) return null;
+    if (eye <= mids[0]) return (eye - mids[0]) / lineSpanAt(mids, 0);
+    const last = mids.length - 1;
+    for (let i = 0; i < last; i++) {
+      if (eye > mids[i + 1]) continue;
+      const span = mids[i + 1] - mids[i];
+      if (!(span > 0.5)) continue;
+      return i + (eye - mids[i]) / span;
+    }
+    return last + (eye - mids[last]) / lineSpanAt(mids, last);
+  }
+
+  function readingProgress() {
+    const key = fontSize + '|' + lineHeight + '|' + stage.clientWidth + '|' + state.current;
+    if (stage.clientHeight >= 2 && (key !== measureKey || !wordMids.length)) {
+      measureWordMids();
+      measureKey = key;
+    }
+    if (!wordMids.length || wordStageH < 2) return null;
+    return cueFromMids(wordMids, wordStageH * 0.22 + scrollPos);
+  }
+
+  function readingCue() {
+    const liveWord =
+      yellowWords &&
+      yellowIndex >= 0 &&
+      (state.phase === 'recording' || state.phase === 'paused' || state.phase === 'saving');
+    if (liveWord) return yellowIndex;
+    const measured = readingProgress();
+    if (measured == null || !isFinite(measured)) return lastReadCue;
+    lastReadCue = measured;
+    return lastReadCue;
+  }
+
+  function notifyReadHead(scrolling) {
+    const api = window.__reelPhone;
+    if (!api || !api.sendTeleprompter || state.free) return;
+    const cue = yellowWords && yellowIndex >= 0 ? yellowIndex : lastReadCue;
+    if (yellowWords && yellowIndex >= 0) lastReadCue = yellowIndex;
+    api.sendTeleprompter({
+      scrolling: !!scrolling,
+      phase: state.phase,
+      speed: speed,
+      readAt: cue,
+      yellowWords: yellowWords,
+      yellowIndex: yellowIndex,
+    });
+  }
+
+  function pushReadCue() {
+    if (state.phase !== 'recording') return;
+    if (!(yellowWords && yellowIndex >= 0)) {
+      const measured = readingProgress();
+      if (measured != null && isFinite(measured)) lastReadCue = measured;
+    }
+    notifyReadHead(true);
   }
 
   let speed = 3;
@@ -271,6 +357,13 @@
   // to zero every frame at slow speeds, because scrollTop always reads back
   // an integer. Accumulate the real position here instead, and only assign.
   let scrollPos = 0;
+  let wordMids = [];
+  let wordStageH = 0;
+  let measureKey = '';
+  let lastReadCue = 0;
+  let takeSaved = false;
+  let saveEpoch = 0;
+  let saveBusy = false;
   let lastFrameTs = 0;
   let recordStartTs = 0;
   let clockSeconds = 0;
@@ -310,6 +403,10 @@
       setRecordLabel('ادامه');
       recordBtn.disabled = false;
       recordBtn.classList.add('on');
+    } else if (state.phase === 'saving') {
+      setRecordLabel('صبر کن');
+      recordBtn.disabled = true;
+      recordBtn.classList.remove('on');
     } else if (state.phase === 'countdown') {
       recordBtn.disabled = true;
       recordBtn.classList.remove('on');
@@ -474,6 +571,8 @@
   }
 
   function renderTeleprompter() {
+    wordMids = [];
+    measureKey = '';
     textEl.innerHTML = '';
     state.paragraphs.forEach((p, i) => {
       const div = document.createElement('div');
@@ -613,7 +712,8 @@
     recordedWordTimings = [];
     if (yellowSchedule.length) {
       yellowIndex = 0;
-      markYellowWord(0);
+      const word = markYellowWord(0);
+      followYellowWord(word);
     }
     state.chunks = [];
     state.audioChunks = [];
@@ -710,13 +810,79 @@
     pushTeleprompter({ scrolling: true });
   }
 
+  function pauseLiveRecorders() {
+    const list = [state.mediaRecorder].concat((state.cameraRecorders || []).map((item) => item.recorder));
+    list.forEach((rec) => {
+      if (!rec || rec.state !== 'recording' || typeof rec.pause !== 'function') return;
+      try {
+        rec.pause();
+      } catch (err) {}
+    });
+  }
+
+  function presentReview(blob) {
+    if (state.phase === 'idle' || state.phase === 'ready' || state.phase === 'done') return;
+    if (reviewUrl) URL.revokeObjectURL(reviewUrl);
+    reviewUrl = URL.createObjectURL(blob);
+    reviewVideo.src = reviewUrl;
+    reviewVideo.hidden = false;
+    liveCam.hidden = true;
+    reviewVideo.currentTime = 0;
+    reviewVideo.play().catch(() => {});
+    state.phase = 'review';
+    updateRecordButton();
+    if (acceptBtn) acceptBtn.disabled = !takeSaved;
+    setStatus('پخش دوباره، Enter برای قبول، R برای دوباره‌ضبط');
+    renderProgress();
+    notifyReadHead(false);
+  }
+
+  let reviewUrl = '';
+
   function stopRecording(toEditor) {
+    if (state.phase === 'saving' || state.phase === 'review') return;
     if (!recordingLive() || !state.mediaRecorder) return;
     finishToEditor = !!toEditor;
+    if (state.phase === 'recording') {
+      clockSeconds = Math.max(0, (performance.now() - recordStartTs) / 1000);
+    }
+    const epoch = ++saveEpoch;
+    saveBusy = false;
+    takeSaved = false;
+    // Leave the recording screen in this same turn. MediaRecorder.stop and
+    // the file save can take seconds, and the button must not wait on them.
+    state.phase = toEditor ? 'saving' : 'review';
+    updateRecordButton();
+    if (!toEditor && acceptBtn) acceptBtn.disabled = true;
+    setStatus('متوقف شد');
+    notifyReadHead(false);
     const rec = state.mediaRecorder;
+    const cameras = (state.cameraRecorders || []).slice();
+    setTimeout(() => {
+      if (epoch !== saveEpoch) return;
+      pauseLiveRecorders();
+      haltRecorders(rec, cameras, epoch);
+    }, 0);
+  }
+
+  function requestRecorderStop(rec) {
+    if (!rec || rec.state === 'inactive' || rec._reelStop) return false;
+    rec._reelStop = true;
     try {
       if (rec.state === 'recording' || rec.state === 'paused') rec.stop();
-    } catch (err) {}
+      return true;
+    } catch (err) {
+      rec._reelStop = false;
+      return false;
+    }
+  }
+
+  function haltRecorders(rec, cameras, epoch) {
+    if (epoch !== saveEpoch) return;
+    cameras.forEach((item) => requestRecorderStop(item.recorder));
+    const armed = rec && (rec.state === 'recording' || rec.state === 'paused');
+    const started = armed && requestRecorderStop(rec);
+    if (!started && state.phase === 'saving') onRecordingStopped();
   }
 
   function cameraSlots() {
@@ -778,8 +944,10 @@
         return;
       }
       rec.addEventListener('stop', () => resolve(), { once: true });
+      if (rec._reelStop) return;
+      rec._reelStop = true;
       try {
-        rec.stop();
+        if (rec.state === 'recording' || rec.state === 'paused') rec.stop();
       } catch (err) {
         resolve();
       }
@@ -796,11 +964,15 @@
   }
 
   async function onRecordingStopped() {
+    if (saveBusy) return;
+    const epoch = saveEpoch;
+    if (state.phase === 'idle') return;
+    saveBusy = true;
     const toEditor = finishToEditor;
     finishToEditor = false;
+    try {
     const cameraTakes = (state.cameraRecorders || []).slice();
     state.cameraRecorders = [];
-    await Promise.all(cameraTakes.map((item) => stopOneRecorder(item.recorder)));
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     const p = state.paragraphs[state.current];
     const take = p.takes.length + 1;
@@ -814,8 +986,12 @@
     } else {
       recordedWordTimings = [];
     }
+    if (!toEditor) presentReview(blob);
+    await Promise.all(cameraTakes.map((item) => stopOneRecorder(item.recorder)));
+    if (epoch !== saveEpoch || state.phase === 'idle') return;
 
     const uploaded = await uploadClip(blob, p.index, take);
+    if (epoch !== saveEpoch || state.phase === 'idle') return;
     const fileName = uploaded.file;
     p.takes.push(fileName);
     p.pendingWordTimings = recordedWordTimings.slice();
@@ -833,6 +1009,7 @@
     state.pendingCameraFiles = cameraFiles.some(Boolean) ? cameraFiles.map((name) => name || '') : null;
     const reel = window.__reel;
     state.pendingLookCuts = reel && typeof reel.takeLookCuts === 'function' ? reel.takeLookCuts() : null;
+    if (epoch !== saveEpoch || state.phase === 'idle') return;
 
     if (toEditor) {
       p.accepted = fileName;
@@ -853,6 +1030,7 @@
       closeBrowse();
       updateRecordButton();
       await saveSession();
+      if (epoch !== saveEpoch) return;
       try {
         const durations = {};
         if (p.accepted && p.duration) durations[p.accepted] = p.duration;
@@ -862,21 +1040,23 @@
           body: JSON.stringify({ durations }),
         });
       } catch (err) {}
+      if (epoch !== saveEpoch) return;
       location.href = '/edit.html?slug=' + encodeURIComponent(state.slug);
       return;
     }
 
-    reviewVideo.src = URL.createObjectURL(blob);
-    reviewVideo.hidden = false;
-    liveCam.hidden = true;
-    reviewVideo.currentTime = 0;
-    reviewVideo.play().catch(() => {});
-
-    state.phase = 'review';
-    updateRecordButton();
-    setStatus('پخش دوباره، Enter برای قبول، R برای دوباره‌ضبط');
-    renderProgress();
-    pushTeleprompter({ scrolling: false });
+    takeSaved = true;
+    if (state.phase === 'review') {
+      if (acceptBtn) acceptBtn.disabled = false;
+      setStatus('پخش دوباره، Enter برای قبول، R برای دوباره‌ضبط');
+    }
+    } catch (err) {
+      if (epoch !== saveEpoch || state.phase === 'idle') return;
+      state.phase = 'ready';
+      updateRecordButton();
+      setStatus('ذخیره نشد');
+      notifyReadHead(false);
+    }
   }
 
   async function saveSession() {
@@ -939,7 +1119,7 @@
   }
 
   async function acceptTake() {
-    if (accepting || state.phase !== 'review') return;
+    if (accepting || state.phase !== 'review' || !takeSaved) return;
     accepting = true;
     const p = state.paragraphs[state.current];
     p.accepted = p.takes[p.takes.length - 1];
@@ -1009,6 +1189,8 @@
   }
 
   function retake() {
+    saveEpoch += 1;
+    takeSaved = false;
     reviewVideo.hidden = true;
     liveCam.hidden = false;
     reviewVideo.pause();
@@ -1039,7 +1221,8 @@
 
   function exitCapture() {
     if (state.phase === 'idle') return;
-    if (state.phase === 'recording' || state.phase === 'paused' || state.phase === 'countdown') {
+    saveEpoch += 1;
+    if (state.phase === 'recording' || state.phase === 'paused' || state.phase === 'countdown' || state.phase === 'saving') {
       try {
         if (state.audioRecorder && state.audioRecorder.state === 'recording') state.audioRecorder.stop();
       } catch (err) {}
@@ -1130,6 +1313,12 @@
     });
   }
   if (floatStopBtn) {
+    floatStopBtn.addEventListener('pointerdown', (event) => {
+      if (event.button != null && event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      stopRecording(true);
+    });
     floatStopBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       stopRecording(true);
@@ -1256,6 +1445,12 @@
   }
 
   veilGoBtn.addEventListener('click', openFromVeil);
+  recordBtn.addEventListener('pointerdown', (event) => {
+    if (event.button != null && event.button !== 0) return;
+    if (state.phase !== 'recording') return;
+    event.preventDefault();
+    stopRecording(false);
+  });
   recordBtn.addEventListener('click', toggleRecording);
   retakeBtn.addEventListener('click', retake);
   acceptBtn.addEventListener('click', acceptTake);
@@ -1279,9 +1474,12 @@
     const ss = Math.floor(clockSeconds % 60);
     clockEl.textContent = faNum(mm) + ':' + faNum(ss < 10 ? '0' + ss : ss);
 
-    const max = stage.scrollHeight - stage.clientHeight;
-    bar.style.width = (max > 0 ? (stage.scrollTop / max) * 100 : 0) + '%';
-    markActiveLine();
+    if (!frame.barAt || ts - frame.barAt > 400) {
+      frame.barAt = ts;
+      const max = stage.scrollHeight - stage.clientHeight;
+      bar.style.width = (max > 0 ? (stage.scrollTop / max) * 100 : 0) + '%';
+    }
+    if (state.phase !== 'recording') markActiveLine();
 
     requestAnimationFrame(frame);
   }
@@ -1300,6 +1498,10 @@
     if (panel.hidden || state.phase !== 'recording') return;
     pushTeleprompter();
   }, 400);
+  setInterval(() => {
+    if (state.phase !== 'recording') return;
+    pushReadCue();
+  }, 80);
 
   async function loadExistingSession(slug) {
     try {

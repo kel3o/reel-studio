@@ -223,7 +223,22 @@ async function main() {
     assert.strictEqual(tpA.visible, true);
     assert.ok(String(tpA.html).includes('سلام'));
 
+    studio.sendText(JSON.stringify({ type: 'teleprompter', readAt: 4, scrolling: true }));
+    const lightA = await nextTeleprompter(phoneA, 'lightA');
+    assert.strictEqual(lightA.readAt, 4);
+    assert.strictEqual(lightA.scrolling, true);
+
+    const phoneC = await withTimeout(connectClient(PORT), 'phoneC connect');
+    phoneC.sendText(JSON.stringify({ role: 'phone', id: 'phonec3' }));
+    const helloC = JSON.parse((await withTimeout(phoneC.next(), 'helloC')).data.toString());
+    assert.strictEqual(helloC.type, 'hello');
+    const stored = await nextTeleprompter(phoneC, 'stored');
+    assert.ok(String(stored.html).includes('سلام'));
+    assert.strictEqual(stored.readAt, 4);
+    assert.strictEqual(stored.scrolling, true);
+
     phoneA.end();
+    phoneC.end();
     phoneB.end();
     studio.end();
     console.log('phone relay ok');

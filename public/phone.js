@@ -49,6 +49,12 @@
   let tpBaseAt = 0;
   let tpYellow = false;
   let tpYellowIndex = -1;
+  let tpReadAt = 0;
+  let tpReadStamp = 0;
+  let tpReadRate = 0;
+  let tpHasRead = false;
+  let tpMids = [];
+  let tpLayoutKey = '';
 
   function renderTpUi() {
     const show = tpWanted && tpUserOn;
@@ -59,9 +65,10 @@
     tpToggle.textContent = tpUserOn ? 'پنهان' : 'متن';
     if (!tpRecord) return;
     const recording = tpPhase === 'recording';
-    tpRecord.textContent = recording ? 'توقف' : 'ضبط';
+    const saving = tpPhase === 'saving';
+    tpRecord.textContent = saving ? 'صبر کن' : recording ? 'توقف' : 'ضبط';
     tpRecord.classList.toggle('on', recording);
-    tpRecord.disabled = tpPhase === 'countdown' || tpPhase === 'review' || tpPhase === 'done';
+    tpRecord.disabled = saving || tpPhase === 'countdown' || tpPhase === 'review' || tpPhase === 'done';
   }
 
   function markPhoneLine() {
@@ -111,20 +118,95 @@
     tpText.style.lineHeight = String(tpLead);
     tpText.style.paddingTop = 'calc(26vh + ' + 2 * tpFont * tpLead + 'px)';
     if (typeof msg.phase === 'string') tpPhase = msg.phase;
-    if (typeof msg.scrollPos === 'number') {
+    if (typeof msg.readAt === 'number' && isFinite(msg.readAt)) {
+      noteRead(msg.readAt);
+    } else if (typeof msg.scrollPos === 'number') {
+      tpHasRead = false;
       tpBasePos = msg.scrollPos;
       tpBaseAt = performance.now();
     } else if (msg.resetScroll) {
+      tpHasRead = false;
       tpBasePos = 0;
       tpBaseAt = performance.now();
     }
     if (typeof msg.visible === 'boolean') tpWanted = msg.visible;
-    if (typeof msg.scrolling === 'boolean') tpScrolling = msg.scrolling;
+    if (typeof msg.scrolling === 'boolean') {
+      tpScrolling = msg.scrolling;
+      if (!tpScrolling) tpReadRate = 0;
+    }
     if (typeof msg.yellowWords === 'boolean') tpYellow = msg.yellowWords;
     if (typeof msg.yellowIndex === 'number') tpYellowIndex = msg.yellowIndex;
     if (!tpWanted) tpScrolling = false;
     renderTpUi();
+    measureIfNeeded();
     markPhoneLine();
+  }
+
+  function noteRead(value) {
+    const now = performance.now();
+    if (tpHasRead) {
+      const dt = (now - tpReadStamp) / 1000;
+      const jump = value - tpReadAt;
+      if (dt > 0.02 && dt < 0.6 && jump > 0.001 && jump < 0.55) tpReadRate = jump / dt;
+      else tpReadRate = 0;
+    }
+    tpReadAt = value;
+    tpReadStamp = now;
+    tpHasRead = true;
+  }
+
+  function liveRead() {
+    if (!tpScrolling || tpReadRate <= 0) return tpReadAt;
+    const extra = Math.min(0.12, (performance.now() - tpReadStamp) / 1000);
+    return tpReadAt + tpReadRate * extra;
+  }
+
+  function lineSpanAt(mids, index) {
+    const y = mids[index];
+    for (let i = index + 1; i < mids.length; i++) {
+      if (mids[i] - y > 0.5) return mids[i] - y;
+    }
+    for (let i = index - 1; i >= 0; i--) {
+      if (y - mids[i] > 0.5) return y - mids[i];
+    }
+    return Math.max(1, tpFont * tpLead);
+  }
+
+  function measureIfNeeded() {
+    if (!tpWanted || !tpUserOn || tpLayer.hidden) return;
+    const key = tpFont + '|' + tpLead + '|' + tpStage.clientWidth + '|' + tpHtml;
+    if (key === tpLayoutKey && tpMids.length) return;
+    const prev = tpText.style.transform;
+    tpText.style.transform = 'none';
+    const words = tpText.querySelectorAll('.tp-w');
+    const root = tpText.getBoundingClientRect().top;
+    const mids = new Array(words.length);
+    for (let i = 0; i < words.length; i++) {
+      const rect = words[i].getBoundingClientRect();
+      mids[i] = (rect.top + rect.bottom) / 2 - root;
+    }
+    tpText.style.transform = prev;
+    if (!mids.length || !tpStage.clientHeight) return;
+    tpMids = mids;
+    tpLayoutKey = key;
+  }
+
+  function placeRead(progress) {
+    const mids = tpMids;
+    const eye = tpStage.clientHeight * 0.22;
+    if (!mids.length || eye < 1) return;
+    let y;
+    if (progress <= 0 || mids.length === 1) {
+      y = mids[0] + lineSpanAt(mids, 0) * progress;
+    } else if (progress >= mids.length - 1) {
+      const last = mids.length - 1;
+      y = mids[last] + lineSpanAt(mids, last) * (progress - last);
+    } else {
+      const i = Math.floor(progress);
+      const next = Math.min(mids.length - 1, i + 1);
+      y = mids[i] + (mids[next] - mids[i]) * (progress - i);
+    }
+    tpText.style.transform = 'translateY(' + -(y - eye) + 'px)';
   }
 
   function tpOffset() {
@@ -134,7 +216,14 @@
   }
 
   function tpFrame() {
-    if (tpUserOn) tpText.style.transform = 'translateY(' + -tpOffset() + 'px)';
+    if (tpUserOn) {
+      if (tpHasRead) {
+        measureIfNeeded();
+        placeRead(liveRead());
+      } else {
+        tpText.style.transform = 'translateY(' + -tpOffset() + 'px)';
+      }
+    }
     if (tpWanted && tpUserOn) markPhoneLine();
     requestAnimationFrame(tpFrame);
   }
@@ -146,10 +235,25 @@
     renderTpUi();
   });
   if (tpRecord) {
+    tpRecord.addEventListener('pointerdown', function (event) {
+      if (event.button != null && event.button !== 0) return;
+      if (tpPhase !== 'recording') return;
+      event.preventDefault();
+      tpPhase = 'review';
+      tpScrolling = false;
+      tpReadRate = 0;
+      renderTpUi();
+      sendJson({ type: 'capture', action: 'toggle' });
+    });
     tpRecord.addEventListener('click', function () {
+      if (tpPhase === 'recording' || tpPhase === 'saving' || tpPhase === 'review') return;
       sendJson({ type: 'capture', action: 'toggle' });
     });
   }
+  window.addEventListener('resize', function () {
+    tpLayoutKey = '';
+    measureIfNeeded();
+  });
 
   function setStatus(text) {
     statusEl.textContent = phoneLabel ? phoneLabel + '، ' + text : text;

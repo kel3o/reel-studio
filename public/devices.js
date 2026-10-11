@@ -1740,10 +1740,10 @@
     state.look = !state.split && !state.rotate && loadStoredId('reel.look') === '1';
     if (state.look && window.__reelGaze) window.__reelGaze.boot();
     let storedCut = Number(loadStoredId('reel.cutSeconds'));
-    if (loadStoredId('reel.cutDefaultV') !== '1') {
-      if (!Number.isFinite(storedCut) || storedCut === 1.5) storedCut = 1;
-      storeId('reel.cutSeconds', String(storedCut));
-      storeId('reel.cutDefaultV', '1');
+    if (loadStoredId('reel.cutDefaultV3') !== '1') {
+      storedCut = 1;
+      storeId('reel.cutSeconds', '1');
+      storeId('reel.cutDefaultV3', '1');
     }
     state.cutSeconds = Number.isFinite(storedCut) && storedCut > 0 ? storedCut : 1;
     renderSplitButton();

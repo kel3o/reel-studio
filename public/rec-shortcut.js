@@ -17,8 +17,7 @@
       '<button id="rec-float-stop" type="button" hidden>توقف</button>' +
       '<button id="rec-float-pause" type="button" hidden>توقف کوتاه</button>' +
       '<button id="rec-float-resume" type="button" hidden>شروع مجدد</button>' +
-      '</div>' +
-      '<p id="rec-float-note" class="rec-float-note" hidden></p>'
+      '</div>'
     );
   }
 
@@ -44,13 +43,8 @@
     count.hidden = true;
     stage.appendChild(count);
   }
-  if (!document.getElementById('rec-float-note')) {
-    const note = document.createElement('p');
-    note.id = 'rec-float-note';
-    note.className = 'rec-float-note';
-    note.hidden = true;
-    box.appendChild(note);
-  }
+  const staleNote = document.getElementById('rec-float-note');
+  if (staleNote) staleNote.remove();
 
   try {
     const saved = JSON.parse(localStorage.getItem('reel.floatPos') || '');
@@ -108,7 +102,6 @@
   const pauseBtn = document.getElementById('rec-float-pause');
   const resumeBtn = document.getElementById('rec-float-resume');
   const countEl = document.getElementById('rec-float-count');
-  const noteEl = document.getElementById('rec-float-note');
   const preview = document.getElementById('rec-float-preview');
   const previewCtx = preview && preview.getContext ? preview.getContext('2d') : null;
 
@@ -148,10 +141,15 @@
     orientKey = ORIENT[saved] ? saved : 'landscape';
   }
 
+  let heldMessage = '';
+
   function setNote(text) {
-    if (!noteEl) return;
-    noteEl.hidden = !text;
-    noteEl.textContent = text || '';
+    const status = !text || text.indexOf('در حال ضبط') === 0 || text.indexOf('توقف کوتاه ') === 0;
+    if ((phase === 'recording' || phase === 'paused') && status) return;
+    heldMessage = text || '';
+    if (!heldMessage) return;
+    if (phase === 'recording' || phase === 'paused' || phase === 'countdown') return;
+    paintMessage(heldMessage);
   }
 
   function showCount(n) {
@@ -209,7 +207,8 @@
   }
 
   function paintMessage(text) {
-    if (!previewCtx) return;
+    heldMessage = text || '';
+    if (!previewCtx || !heldMessage) return;
     const w = preview.width;
     const h = preview.height;
     previewCtx.fillStyle = '#000';
@@ -240,7 +239,9 @@
     if (frame.width !== target.width) frame.width = target.width;
     if (frame.height !== target.height) frame.height = target.height;
     const ready = video.readyState >= 2 && video.videoWidth && video.videoHeight;
-    if (ready) {
+    if (heldMessage && phase !== 'recording' && phase !== 'paused' && phase !== 'countdown') {
+      paintMessage(heldMessage);
+    } else if (ready) {
       const crop = cropRect(video.videoWidth, video.videoHeight, target.ratio);
       frameCtx.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, frame.width, frame.height);
       if (previewCtx) {
@@ -252,6 +253,15 @@
         const dw = frame.width * scale;
         const dh = frame.height * scale;
         previewCtx.drawImage(frame, (w - dw) / 2, (h - dh) / 2, dw, dh);
+        if (heldMessage && (phase === 'recording' || phase === 'paused')) {
+          previewCtx.fillStyle = 'rgba(0,0,0,0.62)';
+          previewCtx.fillRect(8, h - 34, w - 16, 26);
+          previewCtx.fillStyle = '#fff';
+          previewCtx.font = '12px Tahoma, sans-serif';
+          previewCtx.textAlign = 'center';
+          previewCtx.textBaseline = 'middle';
+          previewCtx.fillText(heldMessage, w / 2, h - 21);
+        }
       }
     }
     drawHandle = requestAnimationFrame(paintFrame);

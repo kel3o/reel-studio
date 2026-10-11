@@ -1050,13 +1050,24 @@ html[data-theme='light'] .cut-drop input {
 
 .dash-controls .dash-cam-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   transform: translateY(-15px);
 }
 
-.dash-controls .mode-btn-look,
-.dash-controls .look-note {
+.dash-controls .dash-cam-actions > .mode-btn,
+.dash-controls .dash-cam-actions > .mode-btn-wrap {
+  grid-column: auto;
+  min-width: 0;
+}
+
+.dash-controls .dash-cam-actions .mode-btn {
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 8px 4px;
+}
+
+.dash-controls .dash-cam-actions .look-note {
   grid-column: 1 / -1;
 }
 
@@ -2274,13 +2285,6 @@ body.tp-open .rec-float {
 
 .rec-float-count[hidden] {
   display: none;
-}
-
-.rec-float-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: #d5dbe3;
 }
 
 .rec-float-preview {
