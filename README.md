@@ -55,6 +55,8 @@ Reel Studio is a local app for recording a Persian talking-head reel. You write 
 - UI فارسی و راست‌به‌چپ، کوتاه و خودمانی
 - هیچ em dash در متن برنامه، کامیت یا خروجی نیست
 
+راهنمای نصب، برای ایجنت و برای کسی که برنامه‌نویس نیست و برای برنامه‌نویس: [INSTALL.md](INSTALL.md)
+
 ## اجرا
 
 پیش‌نیاز روی همین ماشین:
