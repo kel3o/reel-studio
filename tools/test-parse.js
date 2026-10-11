@@ -22,8 +22,8 @@ console.log('title:', title);
 console.log('paragraphs:', paragraphs.length);
 console.log('words:', wordCount);
 
-assert.strictEqual(paragraphs.length, 15, `expected 15 paragraphs, got ${paragraphs.length}`);
-assert.strictEqual(wordCount, 327, `expected 327 words, got ${wordCount}`);
+assert.strictEqual(paragraphs.length, 3, `expected 3 paragraphs, got ${paragraphs.length}`);
+assert.strictEqual(wordCount, 9, `expected 9 words, got ${wordCount}`);
 
 for (const p of paragraphs) {
   assert.ok(!p.text.includes('##'), `paragraph contains ##: ${p.text}`);
@@ -31,7 +31,7 @@ for (const p of paragraphs) {
 }
 
 assert.ok(
-  paragraphs[paragraphs.length - 1].text.startsWith('ایجنت برای این نیست'),
+  paragraphs[paragraphs.length - 1].text.startsWith('این پاراگراف سومه'),
   `last paragraph does not start with expected text: ${paragraphs[paragraphs.length - 1].text}`
 );
 

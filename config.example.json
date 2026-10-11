@@ -1,6 +1,6 @@
 {
   "port": 7180,
-  "scriptsDir": "D:/github/agency-os/clients/erfandigital/content/scripts",
+  "scriptsDir": "",
   "outDir": "./out",
   "takesDir": "./takes",
   "assetsDir": "./assets",

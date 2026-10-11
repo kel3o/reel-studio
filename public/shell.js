@@ -136,7 +136,7 @@
     '<div class="maker-card" role="dialog" aria-label="سازنده">' +
     '<button type="button" class="maker-close">بستن</button>' +
     '<p class="maker-team" dir="ltr" lang="en">Team <span class="brand-reel">Reel</span> Studio</p>' +
-    '<p class="maker-line">ایده اولیه: <a href="https://www.instagram.com/erfan.digitalll/" target="_blank" rel="noopener noreferrer">عرفان</a></p>' +
+    '<p class="maker-line">ایده اولیه: <a href="https://www.instagram.com/erfan.digitalll/" target="_blank" rel="noopener noreferrer">عرفان</a>، برادرم</p>' +
     '<p class="maker-line">توسعه‌دهنده: <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>' +
     '<p class="maker-line">طراحی شده با <span class="maker-gold">هوش مصنوعی</span></p>' +
     '<p class="maker-line">با ابزار <span class="maker-gold">Cursor</span> و مدل زبانی <span class="maker-gold">Grok 4.7</span></p>' +

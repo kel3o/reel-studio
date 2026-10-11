@@ -85,8 +85,7 @@ reel-studio/
 
 ### 3.1 The input format, fixed and not negotiable
 
-Script files are the ones already in use, for example
-`clients/erfandigital/content/scripts/2026-09-17-closed-loop-agent-reel-v2.md`.
+Script files are markdown files in the configured scripts folder.
 
 - The spoken text is everything between the line `## متن` and the next `## `
   heading. Nothing else in the file is ever spoken.
@@ -115,10 +114,10 @@ config), plus:
 
 The page lists the scripts and shows the chosen one as numbered paragraphs.
 
-**Self test.** `node tools/test-parse.js <path to the v2 script>` must print and
-assert: exactly **15 paragraphs**, **327 words** total, no paragraph containing
-`##` or `**`, and the last paragraph starting with `ایجنت برای این نیست`.
-Those numbers are measured from the real file and are the fixture.
+**Self test.** `node tools/test-parse.js tools/fixtures/sample-script.md` must
+print and assert: exactly **3 paragraphs**, **9 words** total, no paragraph
+containing `##` or `**`, and the last paragraph starting with `این پاراگراف سومه`.
+Those numbers are measured from the checked-in fixture.
 
 ### Phase 2: devices and monitoring
 
@@ -226,15 +225,14 @@ vertical file only, leaving the raw file clean.
 
 ### Phase 7: end to end acceptance
 
-Run the whole thing on the real script
-`2026-09-17-closed-loop-agent-reel-v2.md` with fake devices, recording a short
-placeholder for each of the 15 paragraphs.
+Run the whole thing on `tools/fixtures/sample-script.md` with fake devices,
+recording a short placeholder for each of the 3 paragraphs.
 
 Expected, all asserted, no manual inspection:
 
-1. `out/<slug>-raw.mp4` exists, plays, has 15 paragraphs worth of duration.
+1. `out/<slug>-raw.mp4` exists, plays, has 3 paragraphs worth of duration.
 2. `out/<slug>-vertical.mp4` exists and is exactly 1080x1920.
-3. `session.json` holds, for all 15 paragraphs, the script text, the accepted
+3. `session.json` holds, for all 3 paragraphs, the script text, the accepted
    take filename and its start offset in the stitched timeline. This is what a
    later caption pass will read, so it is asserted now while it is cheap.
 4. `takes/` still holds every clip after both renders finish.
@@ -252,7 +250,7 @@ Expected, all asserted, no manual inspection:
 ```json
 {
   "port": 7180,
-  "scriptsDir": "D:/github/agency-os/clients/erfandigital/content/scripts",
+  "scriptsDir": "",
   "outDir": "./out",
   "takesDir": "./takes",
   "assetsDir": "./assets",
@@ -273,10 +271,9 @@ scripts folder.
 
 ## 6. Repo
 
-New repo at `D:\github\reel-studio`, default branch `main`, work committed there
-directly. It is his own tool on his own machine, so no secrets are expected, but
-the config file stays gitignored anyway in case the scripts path or anything
-else personal ends up in it.
+Default branch is `main`, and work is committed there directly. The config
+file stays gitignored in case a scripts path or anything else personal ends
+up in it.
 
 ---
 

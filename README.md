@@ -1,10 +1,12 @@
 # Reel Studio
 
+Reel Studio is a local app for recording a Persian talking-head reel. You write the script, read it on a teleprompter, record one paragraph at a time, and burn Persian captions on the same laptop. It stays on your machine: no account, no CDN, no upload.
+
 نسخه ۳.۰.۰
 
 استودیوی محلی برای ضبط ریل فارسی. سناریو را همین‌جا می‌نویسی، با تله‌پرامپتر می‌خوانی، پاراگراف‌به‌پاراگراف ضبط می‌کنی، و زیرنویس را روی همان لپ‌تاپ تنظیم و روی ویدیو می‌نشانی. بدون OBS، بدون Camtasia، بدون CDN و بدون لاگین.
 
-ایده اولیه از [عرفان](https://www.instagram.com/erfan.digitalll/). توسعه توسط [آرمان](https://www.instagram.com/arman_cursor)، با Cursor و مدل زبانی.
+ایده اولیه از [عرفان](https://www.instagram.com/erfan.digitalll/)، برادرم. توسعه توسط [آرمان](https://www.instagram.com/arman_cursor)، با Cursor و مدل زبانی.
 
 ## این ابزار چیست
 
@@ -102,4 +104,11 @@ reel-studio/
 
 ## مجوز و حریم
 
-کد برای استفادهٔ شخصی روی یک لپ‌تاپ است. کلید و مسیر شخصی داخل `config.json` می‌ماند و commit نمی‌شود. پوشهٔ `scripts` خارجی فقط خوانده می‌شود و این ابزار داخلش چیزی نمی‌نویسد.
+کد این برنامه تحت [MIT](LICENSE) است. دو بخش کنار کد مجوز خودشان را دارند و رفتار برنامه را عوض نمی‌کنند:
+
+- `public/gaze`: مدل و ران‌تایم MediaPipe، اثر گوگل، [Apache-2.0](public/gaze/LICENSE)
+- `public/fonts`: فونت وزیرمتن، [OFL](public/fonts/OFL.txt)
+
+ffmpeg برنامهٔ جداست و داخل این ریپو نیست. اگر روی سیستم نباشد، از PATH یا از `vendor/ffmpeg` خوانده می‌شود.
+
+`config.json` در گیت نیست. پوشهٔ سناریوی خارجی فقط خوانده می‌شود و این ابزار داخلش چیزی نمی‌نویسد. سناریوهای داخل برنامه در `manual/` و ضبط‌ها در `takes/` می‌مانند و هر دو از گیت بیرون‌اند.

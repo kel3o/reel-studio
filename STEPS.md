@@ -68,7 +68,7 @@ just a bare class) if new hide or show toggles are added later.
 All three self tests pass:
 
 ```
-node tools/test-parse.js "D:/github/agency-os/clients/erfandigital/content/scripts/2026-09-17-closed-loop-agent-reel-v2.md"
+node tools/test-parse.js tools/fixtures/sample-script.md
 node tools/test-devices.js
 node tools/test-capture.js
 ```
@@ -136,9 +136,7 @@ is recorded in `SPEC.md` and it is not an oversight.
 
 - Nothing is blocked. The camera and the microphone are connected and were
   seen by the system on 2026-09-22.
-- First real recording, now that phase 3 works: the script
-  `2026-09-17-closed-loop-agent-reel-v2.md`, which is written, judged and
-  waiting to be recorded.
+- Personal scripts and recordings are not part of this repo.
 - Mid session, the original server process died on its own (cause not
   tracked down) and a stray one from a test run briefly took its place. Both
   are resolved now: the server currently running on port 7180 was started
@@ -147,10 +145,8 @@ is recorded in `SPEC.md` and it is not an oversight.
   `start.bat` looking like it does nothing: something is already listening
   on 7180, which now just opens the browser instead of trying to start a
   second server (see the launcher fix above).
-- One real recording exists from this session:
-  `takes/2026-09-17-closed-loop-agent-reel-v2/01-1.webm`, paragraph 1,
-  accepted. Left in place, it is a real take and phase 4 (stitching) can use
-  it once it exists.
+- Recordings stay in `takes/` on the machine that records them. That folder
+  is gitignored.
 
 ## Reusable tool candidate
 
