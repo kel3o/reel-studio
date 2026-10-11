@@ -33,6 +33,7 @@
     if (path.indexOf('scenarios') !== -1) return 'scenarios';
     if (path.indexOf('archive') !== -1) return 'archive';
     if (path.indexOf('help') !== -1) return 'help';
+    if (path.indexOf('about') !== -1) return 'about';
     if (path === '/' || path.endsWith('index.html')) return 'home';
     return '';
   }
@@ -127,35 +128,4 @@
     });
   });
 
-  const makerBtn = document.getElementById('maker-open');
-  if (!makerBtn) return;
-  const modal = document.createElement('div');
-  modal.className = 'maker-modal';
-  modal.hidden = true;
-  modal.innerHTML =
-    '<div class="maker-card" role="dialog" aria-label="سازنده">' +
-    '<button type="button" class="maker-close">بستن</button>' +
-    '<p class="maker-team" dir="ltr" lang="en">Team <span class="brand-reel">Reel</span> Studio</p>' +
-    '<p class="maker-line">ایده اولیه: <a href="https://www.instagram.com/erfan.digitalll/" target="_blank" rel="noopener noreferrer">عرفان</a>، برادرم</p>' +
-    '<p class="maker-line">توسعه‌دهنده: <a href="https://www.instagram.com/arman_cursor" target="_blank" rel="noopener noreferrer">آرمان</a></p>' +
-    '<p class="maker-line">طراحی شده با <span class="maker-gold">هوش مصنوعی</span></p>' +
-    '<p class="maker-line">با ابزار <span class="maker-gold">Cursor</span> و مدل زبانی <span class="maker-gold">Grok 4.7</span></p>' +
-    '<p class="maker-line">نسخه ۳.۰.۰</p>' +
-    '</div>';
-  document.body.appendChild(modal);
-  const card = modal.querySelector('.maker-card');
-  function openMaker() {
-    modal.hidden = false;
-  }
-  function closeMaker() {
-    modal.hidden = true;
-  }
-  makerBtn.addEventListener('click', openMaker);
-  modal.addEventListener('click', (event) => {
-    if (!card.contains(event.target)) closeMaker();
-  });
-  modal.querySelector('.maker-close').addEventListener('click', closeMaker);
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !modal.hidden) closeMaker();
-  });
 })();

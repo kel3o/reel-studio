@@ -95,6 +95,7 @@ function isAudioOnlyExt(ext) {
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
+  '.webp': 'image/webp',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -119,19 +120,56 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+const MAX_BODY = 1024 * 1024 * 1024;
+
 function readRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    let size = 0;
+    let failed = false;
+    req.on('data', (chunk) => {
+      if (failed) return;
+      size += chunk.length;
+      if (size > MAX_BODY) {
+        failed = true;
+        reject(fail(413, 'فایل خیلی بزرگ است'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (!failed) resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (err) => {
+      if (!failed) reject(err);
+    });
   });
+}
+
+function localHostOk(req) {
+  const host = String(req.headers.host || '').trim().toLowerCase();
+  const port = String(PORT);
+  return host === '127.0.0.1:' + port || host === 'localhost:' + port || host === '[::1]:' + port;
+}
+
+function browserSiteOk(req) {
+  const site = String(req.headers['sec-fetch-site'] || '');
+  return !site || site === 'same-origin' || site === 'none';
 }
 
 function serveStatic(res, pathname) {
   const filePath = pathname === '/' ? '/index.html' : pathname;
-  const resolved = path.join(PUBLIC_DIR, filePath);
-  if (!resolved.startsWith(PUBLIC_DIR)) {
+  let rel = filePath;
+  try {
+    rel = decodeURIComponent(filePath);
+  } catch (err) {
+    res.writeHead(400);
+    res.end();
+    return;
+  }
+  const resolved = path.resolve(PUBLIC_DIR, String(rel).replace(/^[/\\]+/, ''));
+  if (!isInsideDir(PUBLIC_DIR, resolved)) {
     res.writeHead(403);
     res.end();
     return;
@@ -1283,6 +1321,11 @@ function buildManualMarkdown(title, text) {
 }
 
 const server = http.createServer((req, res) => {
+  if (!localHostOk(req) || !browserSiteOk(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('فقط از همین دستگاه');
+    return;
+  }
   const parsed = new URL(req.url, 'http://127.0.0.1');
   const pathname = parsed.pathname;
 

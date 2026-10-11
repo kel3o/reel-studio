@@ -7,6 +7,9 @@ assets/
 manual/
 node_modules/
 certs/
+.env
+*.pfx
+*.pem
 __pycache__/
 *.webm
 *.mp4

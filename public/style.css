@@ -4634,3 +4634,148 @@ body.phone-cam-live .settings-stage .frame-canvas {
     height: min(46vh, 380px);
   }
 }
+
+.about-body {
+  min-height: 100vh;
+}
+
+.about-page {
+  width: min(980px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 28px 0 40px;
+  display: flex;
+  flex-direction: column;
+}
+
+.about-hero {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 28px;
+  align-items: center;
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(70% 140% at 100% 0%, color-mix(in srgb, #f5c542 20%, transparent), transparent 62%),
+    var(--panel);
+}
+
+.about-photo {
+  width: 280px;
+  height: 280px;
+  max-width: 100%;
+  object-fit: cover;
+  object-position: center 18%;
+  border-radius: 22px;
+  display: block;
+  border: 2px solid color-mix(in srgb, #f5c542 72%, var(--border));
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.about-kicker {
+  margin: 0 0 6px;
+  color: #f5c542;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.about-intro h1 {
+  margin: 0 0 12px;
+  font-size: 40px;
+  line-height: 1.15;
+}
+
+.about-intro p,
+.about-story p {
+  margin: 0 0 12px;
+  font-size: 17px;
+  line-height: 1.95;
+}
+
+.about-intro p:last-child {
+  margin-bottom: 0;
+}
+
+.about-story {
+  margin-top: 16px;
+  padding: 22px 24px 8px;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.about-story a,
+.about-thanks a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.about-story a:hover,
+.about-thanks a:hover {
+  text-decoration: underline;
+}
+
+.about-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.about-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 132px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.about-link:hover {
+  border-color: #f5c542;
+}
+
+.about-link svg {
+  width: 28px;
+  height: 28px;
+  color: #f5c542;
+}
+
+.about-link strong {
+  font-size: 16px;
+}
+
+.about-link span {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.about-thanks {
+  margin: 22px 0 0;
+  text-align: center;
+  font-size: 17px;
+  line-height: 1.9;
+}
+
+.about-page .back-btn-end {
+  align-self: flex-end;
+  margin-top: 22px;
+}
+
+@media (max-width: 800px) {
+  .about-hero,
+  .about-links {
+    grid-template-columns: 1fr;
+  }
+
+  .about-photo {
+    margin: 0 auto;
+  }
+}

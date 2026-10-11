@@ -86,10 +86,23 @@
     return order.filter((id) => on.includes(id));
   }
 
+  function snapCutSeconds(value) {
+    let n = Number(value);
+    if (!Number.isFinite(n)) n = 1;
+    n = Math.round(n * 2) / 2;
+    if (n < 0.5) n = 0.5;
+    if (n > 30) n = 30;
+    return n;
+  }
+
+  function formatCutSeconds(value) {
+    return snapCutSeconds(value).toFixed(1);
+  }
+
   function cutIntervalMs() {
     const value = Number(state.cutSeconds);
     if (!Number.isFinite(value)) return 1000;
-    return Math.max(300, Math.min(30000, Math.round(value * 1000)));
+    return Math.max(500, Math.min(30000, Math.round(value * 1000)));
   }
 
   function resetCutClock() {
@@ -1426,7 +1439,8 @@
     const faceCount = slots.filter((slot) => slot && slot.kind !== 'screen').length;
     const gaze = window.__reelGaze;
     if (faceCount < 2) {
-      lookNote.textContent = 'حداقل دو دوربین روشن کن';
+      lookNote.hidden = true;
+      lookNote.textContent = '';
       return;
     }
     if (!gaze || !gaze.isReady()) {
@@ -1558,7 +1572,7 @@
     if (splitBtn) splitBtn.classList.toggle('on', !!state.split);
     if (rotateBtn) rotateBtn.classList.toggle('on', !!state.rotate);
     if (lookBtn) lookBtn.classList.toggle('on', !!state.look);
-    if (cutSecondsInput) cutSecondsInput.value = String(state.cutSeconds);
+    if (cutSecondsInput) cutSecondsInput.value = formatCutSeconds(state.cutSeconds);
     renderLookNote();
     renderSplitPicks();
   }
@@ -1740,12 +1754,12 @@
     state.look = !state.split && !state.rotate && loadStoredId('reel.look') === '1';
     if (state.look && window.__reelGaze) window.__reelGaze.boot();
     let storedCut = Number(loadStoredId('reel.cutSeconds'));
-    if (loadStoredId('reel.cutDefaultV3') !== '1') {
+    if (loadStoredId('reel.cutDefaultV4') !== '1') {
       storedCut = 1;
-      storeId('reel.cutSeconds', '1');
-      storeId('reel.cutDefaultV3', '1');
+      storeId('reel.cutSeconds', '1.0');
+      storeId('reel.cutDefaultV4', '1');
     }
-    state.cutSeconds = Number.isFinite(storedCut) && storedCut > 0 ? storedCut : 1;
+    state.cutSeconds = snapCutSeconds(storedCut);
     renderSplitButton();
     renderOrientationButtons();
     orientationButtons().forEach((btn) => {
@@ -1866,14 +1880,17 @@
     }, 150);
     if (cutSecondsInput) {
       const saveCut = () => {
-        let value = Number(String(cutSecondsInput.value).replace(',', '.'));
-        if (!Number.isFinite(value)) value = 1;
-        value = Math.max(0.3, Math.min(30, Math.round(value * 10) / 10));
+        const value = snapCutSeconds(String(cutSecondsInput.value).replace(',', '.'));
         state.cutSeconds = value;
-        cutSecondsInput.value = String(value);
-        storeId('reel.cutSeconds', String(value));
+        cutSecondsInput.value = formatCutSeconds(value);
+        storeId('reel.cutSeconds', formatCutSeconds(value));
         if (state.rotate) resetCutClock();
       };
+      cutSecondsInput.addEventListener('input', (event) => {
+        const raw = String(cutSecondsInput.value).replace(',', '.');
+        if (raw === '' || raw === '.' || raw.endsWith('.')) return;
+        saveCut(event);
+      });
       cutSecondsInput.addEventListener('change', saveCut);
       cutSecondsInput.addEventListener('blur', saveCut);
     }

@@ -310,7 +310,14 @@
   function connectSocket() {
     if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/api/phone-ws');
+    let key = '';
+    try {
+      key = new URLSearchParams(location.search).get('k') || '';
+    } catch (err) {
+      key = '';
+    }
+    const query = key ? '?k=' + encodeURIComponent(key) : '';
+    ws = new WebSocket(proto + '//' + location.host + '/api/phone-ws' + query);
     ws.binaryType = 'arraybuffer';
     hello = false;
     ws.onopen = function () {
